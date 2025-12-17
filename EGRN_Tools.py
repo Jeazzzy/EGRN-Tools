@@ -38,7 +38,7 @@ class Application(TkinterDnD.Tk):
                              command=lambda: self.show_frame("XmlExtractorPage"))
         button2 = ttk.Button(control_frame, text="Распаковка ZIP",
                              command=lambda: self.show_frame("ZipProcessorPage"))
-        button3 = ttk.Button(control_frame, text="Смена проекции MIF",
+        button3 = ttk.Button(control_frame, text="Исправление MIF",
                              command=lambda: self.show_frame("MifProjectionPage"))
 
         button1.pack(side="left", padx=10, pady=5)
@@ -387,17 +387,17 @@ class MifProjectionPage(tk.Frame):
         self.label.dnd_bind('<<Drop>>', self.drop_files)
 
         self.count_var = tk.StringVar(value="Загружено файлов: 0")
-        self.count_label = tk.Label(self, textvariable=self.count_var, font=("Arial", 11), bg="#e8f0ff")
+        self.count_label = tk.Label(self, textvariable=self.count_var, font=("Arial", 11), bg="#f5f5f5")
         self.count_label.pack(pady=5)
 
-        btn_frame = tk.Frame(self, bg="#e8f0ff")
+        btn_frame = tk.Frame(self, bg="#f5f5f5")
         btn_frame.pack(pady=10)
 
         tk.Button(btn_frame, text="Очистить файлы",
                   font=("Arial", 14, 'bold'),
                   bg="#C0C0C0", fg="white",
                   command=self.clear_files).pack(side=tk.LEFT, padx=10)
-        tk.Button(btn_frame, text="Применить проекцию",
+        tk.Button(btn_frame, text="Исправить пределы",
                   font=("Arial", 14, 'bold'),
                   bg="#87CEEB", fg="white",
                   command=self.change_projection).pack(side=tk.LEFT, padx=10)
