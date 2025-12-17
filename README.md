@@ -122,6 +122,3 @@ Pull requests, issues и предложения приветствуются.
 
 Если инструмент оказался полезен — пожалуйста, ⭐ поставьте звезду репозиторию:
 [https://github.com/Jeazzzy/EGRN-Tools](https://github.com/Jeazzzy/EGRN-Tools)
-
-```
-```
