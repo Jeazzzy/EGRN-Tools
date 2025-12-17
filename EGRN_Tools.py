@@ -1,5 +1,3 @@
-#Амир узбечка лютая козел пидармот
-
 import os
 import csv
 import zipfile
