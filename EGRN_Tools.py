@@ -208,6 +208,20 @@ class ZipProcessorPage(tk.Frame):
         self.progress_bar = ttk.Progressbar(self, orient="horizontal", mode="determinate", length=550)
         self.progress_bar.pack(pady=10, padx=20)
 
+        self.zip_rename_label = tk.Label(
+            self,
+            text="Для быстрого переименовывания\nПеретащите ZIP-файлы сюда",
+            bg="#E0FFFF",
+            width=60,
+            height=6,
+            relief="ridge"
+        )
+        self.zip_rename_label.pack(pady=10)
+
+        self.zip_rename_label.drop_target_register(DND_FILES)
+        self.zip_rename_label.dnd_bind('<<Drop>>', self.drop_zip_rename)
+
+
         stats_label = tk.Label(self, textvariable=self.stats_var, font=("Arial", 10), justify="left", bg="#f5f5f5")
         stats_label.pack(pady=5, padx=20, anchor="w")
 
@@ -242,6 +256,46 @@ class ZipProcessorPage(tk.Frame):
             print(f"Неизвестная ошибка при обработке XML: {e}")
             return None
         return None
+
+    def rename_zip_by_cadastral(self, zip_path):
+        try:
+            with zipfile.ZipFile(zip_path, 'r') as zf:
+                xml_info = next(
+                    (info for info in zf.infolist() if info.filename.lower().endswith('.xml')),
+                    None
+                )
+                if not xml_info:
+                    return f"XML не найден: {os.path.basename(zip_path)}"
+
+                with zf.open(xml_info) as xml_file:
+                    xml_content = xml_file.read()
+                    cad_number = self.get_cad_number_from_xml(xml_content)
+
+                if not cad_number:
+                    return f"Кадастровый номер не найден: {os.path.basename(zip_path)}"
+
+            folder = os.path.dirname(zip_path)
+            base_name = cad_number
+            new_path = os.path.join(folder, f"{base_name}.zip")
+
+            i = 1
+            while os.path.exists(new_path):
+                new_path = os.path.join(folder, f"{base_name}_{i}.zip")
+                i += 1
+
+            os.rename(zip_path, new_path)
+            return f"Переименован: {os.path.basename(new_path)}"
+
+        except Exception as e:
+            return f"Ошибка {os.path.basename(zip_path)}: {e}"
+
+    def drop_zip_rename(self, event):
+        files = self.master.tk.splitlist(event.data)
+
+        for file in files:
+            if file.lower().endswith(".zip"):
+                result = self.rename_zip_by_cadastral(file)
+                print(result)
 
     def process_zip_files(self):
         source_dir = self.source_dir_var.get().strip()
