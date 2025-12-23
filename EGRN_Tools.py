@@ -210,7 +210,7 @@ class ZipProcessorPage(tk.Frame):
 
         self.zip_rename_label = tk.Label(
             self,
-            text="Для быстрого переименовывания\nПеретащите ZIP-файлы сюда",
+            text="Для быстрого переименовывания\nПеретащите ZIP/XML-файлы сюда",
             bg="#E0FFFF",
             width=60,
             height=6,
@@ -289,12 +289,42 @@ class ZipProcessorPage(tk.Frame):
         except Exception as e:
             return f"Ошибка {os.path.basename(zip_path)}: {e}"
 
+    def rename_xml_by_cadastral(self, xml_path):
+        try:
+            with open(xml_path, "rb") as f:
+                xml_content = f.read()
+
+            cad_number = self.get_cad_number_from_xml(xml_content)
+            if not cad_number:
+                return f"Кадастровый номер не найден: {os.path.basename(xml_path)}"
+
+            folder = os.path.dirname(xml_path)
+            base_name = cad_number
+            new_path = os.path.join(folder, f"{base_name}.xml")
+
+            i = 1
+            while os.path.exists(new_path):
+                new_path = os.path.join(folder, f"{base_name}_{i}.xml")
+                i += 1
+
+            os.rename(xml_path, new_path)
+            return f"XML переименован: {os.path.basename(new_path)}"
+
+        except Exception as e:
+            return f"Ошибка XML {os.path.basename(xml_path)}: {e}"
+
     def drop_zip_rename(self, event):
         files = self.master.tk.splitlist(event.data)
 
         for file in files:
+            file = file.strip("{}")  # важно для Windows путей с пробелами
+
             if file.lower().endswith(".zip"):
                 result = self.rename_zip_by_cadastral(file)
+                print(result)
+
+            elif file.lower().endswith(".xml"):
+                result = self.rename_xml_by_cadastral(file)
                 print(result)
 
     def process_zip_files(self):
