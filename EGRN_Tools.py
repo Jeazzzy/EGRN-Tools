@@ -294,7 +294,7 @@ class ZipProcessorPage(tk.Frame):
 
             i = 1
             while os.path.exists(new_path):
-                new_path = os.path.join(folder, f"{base_name}_{i}.zip")
+                new_path = os.path.join(folder, f"{base_name}({i}).zip")
                 i += 1
 
             os.rename(zip_path, new_path)
@@ -318,7 +318,7 @@ class ZipProcessorPage(tk.Frame):
 
             i = 1
             while os.path.exists(new_path):
-                new_path = os.path.join(folder, f"{base_name}_{i}.xml")
+                new_path = os.path.join(folder, f"{base_name}({i}).xml")
                 i += 1
 
             os.rename(xml_path, new_path)
