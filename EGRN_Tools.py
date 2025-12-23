@@ -242,20 +242,34 @@ class ZipProcessorPage(tk.Frame):
     def get_cad_number_from_xml(self, xml_content):
         try:
             root = ET.fromstring(xml_content)
-            common_data_element = root.find(".//common_data")
-            if common_data_element is not None:
-                cad_element = common_data_element.find("cad_number")
-            else:
-                cad_element = None
-            if cad_element is not None and cad_element.text:
-                return cad_element.text.strip().replace(":", "_")
+
+            cad_text = None
+
+            # Новый алгоритм для КПТ
+            if root.tag == "extract_cadastral_plan_territory":
+                cad_element = root.find(".//cadastral_block/cadastral_number")
+                if cad_element is not None and cad_element.text:
+                    cad_text = cad_element.text
+
+            # Старый алгоритм (fallback)
+            if not cad_text:
+                common_data = root.find(".//common_data")
+                if common_data is not None:
+                    cad_element = common_data.find("cad_number")
+                    if cad_element is not None and cad_element.text:
+                        cad_text = cad_element.text
+
+            if cad_text:
+                return cad_text.strip().replace(":", "_")
+
+            return None
+
         except ET.ParseError:
             print("Ошибка: Не удалось распарсить XML.")
             return None
         except Exception as e:
             print(f"Неизвестная ошибка при обработке XML: {e}")
             return None
-        return None
 
     def rename_zip_by_cadastral(self, zip_path):
         try:
