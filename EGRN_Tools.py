@@ -334,12 +334,81 @@ class ZipProcessorPage(tk.Frame):
             file = file.strip("{}")  # важно для Windows путей с пробелами
 
             if file.lower().endswith(".zip"):
-                result = self.rename_zip_by_cadastral(file)
-                print(result)
+                # Проверяем, содержит ли ZIP другие ZIP файлы
+                temp_dir = os.path.join(os.path.dirname(file), "_temp_nested_extract")
+                os.makedirs(temp_dir, exist_ok=True)
+
+                original_name = os.path.basename(file)
+                backup_path = file + ".backup"
+
+                try:
+                    # Создаем backup исходного ZIP
+                    shutil.copy2(file, backup_path)
+
+                    with zipfile.ZipFile(file, 'r') as outer_zip:
+                        outer_zip.extractall(temp_dir)
+
+                    nested_zips = []
+                    for root, dirs, files_list in os.walk(temp_dir):
+                        for f in files_list:
+                            if f.lower().endswith('.zip'):
+                                nested_zips.append(os.path.join(root, f))
+
+                    if nested_zips:
+                        # Создаем новый ZIP с тем же именем
+                        with zipfile.ZipFile(file, 'w', zipfile.ZIP_DEFLATED) as new_zip:
+                            # Копируем все НЕ-ZIP файлы как есть
+                            for root, dirs, files_list in os.walk(temp_dir):
+                                for f in files_list:
+                                    full_path = os.path.join(root, f)
+                                    arcname = os.path.relpath(full_path, temp_dir)
+                                    if not f.lower().endswith('.zip'):
+                                        new_zip.write(full_path, arcname)
+
+                            # Добавляем переименованные ZIP
+                            for nested_zip_path in nested_zips:
+                                cad_number = self.get_cad_number_from_nested_zip(nested_zip_path)
+                                if cad_number:
+                                    new_name = f"{cad_number}.zip"
+                                    new_zip.write(nested_zip_path, new_name)
+                                    print(f"Заменен в архиве: {new_name}")
+                                else:
+                                    # Если КН не найден, добавляем как есть
+                                    arcname = os.path.relpath(nested_zip_path, temp_dir)
+                                    new_zip.write(nested_zip_path, arcname)
+
+                    print(f"Архив {original_name} обновлен!")
+                except Exception as e:
+                    print(f"Ошибка обработки {original_name}: {e}")
+                    # Восстанавливаем backup
+                    if os.path.exists(backup_path):
+                        shutil.move(backup_path, file)
+                finally:
+                    if os.path.exists(temp_dir):
+                        shutil.rmtree(temp_dir)
+                    if os.path.exists(backup_path):
+                        os.remove(backup_path)
 
             elif file.lower().endswith(".xml"):
                 result = self.rename_xml_by_cadastral(file)
                 print(result)
+
+    def get_cad_number_from_nested_zip(self, zip_path):
+        """Извлекает кадастровый номер из ZIP без изменения файла"""
+        try:
+            with zipfile.ZipFile(zip_path, 'r') as zf:
+                xml_info = next(
+                    (info for info in zf.infolist() if info.filename.lower().endswith('.xml')),
+                    None
+                )
+                if not xml_info:
+                    return None
+
+                with zf.open(xml_info) as xml_file:
+                    xml_content = xml_file.read()
+                    return self.get_cad_number_from_xml(xml_content)
+        except:
+            return None
 
     def process_zip_files(self):
         source_dir = self.source_dir_var.get().strip()
