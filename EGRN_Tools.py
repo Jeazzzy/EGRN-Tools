@@ -2,6 +2,7 @@ import os
 import csv
 import zipfile
 import shutil
+import win32com.client
 import xml.etree.ElementTree as ET
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -13,7 +14,7 @@ class Application(TkinterDnD.Tk):
     def __init__(self, *args, **kwargs):
         TkinterDnD.Tk.__init__(self, *args, **kwargs)
         self.title("EGRN Tools")
-        self.geometry("600x450")
+        self.geometry("600x600")
 
         # --- Контейнер для страниц ---
         container = tk.Frame(self)
@@ -27,7 +28,7 @@ class Application(TkinterDnD.Tk):
 
         # --- Словарь для страниц ---
         self.frames = {}
-        for F in (XmlExtractorPage, ZipProcessorPage, MifProjectionPage):
+        for F in (XmlExtractorPage, ZipProcessorPage, MifProjectionPage, MdbCopyPage):
             page_name = F.__name__
             frame = F(parent=container, controller=self)
             self.frames[page_name] = frame
@@ -40,10 +41,13 @@ class Application(TkinterDnD.Tk):
                              command=lambda: self.show_frame("ZipProcessorPage"))
         button3 = ttk.Button(control_frame, text="Исправление MIF",
                              command=lambda: self.show_frame("MifProjectionPage"))
+        button4 = ttk.Button(control_frame, text="Копирование МБД",
+                             command=lambda: self.show_frame("MdbCopyPage"))
 
         button1.pack(side="left", padx=10, pady=5)
         button2.pack(side="left", padx=10, pady=5)
         button3.pack(side="left", padx=10, pady=5)
+        button4.pack(side="left", padx=10, pady=5)
 
         self.show_frame("XmlExtractorPage")
 
@@ -547,6 +551,132 @@ class MifProjectionPage(tk.Frame):
 
         messagebox.showinfo("Готово", f"Проекция изменена для {len(self.mif_files)} файлов.")
 
+# --- 4. Копирование таблицы MDB ---
+class MdbCopyPage(tk.Frame):
+    def __init__(self, parent, controller):
+        tk.Frame.__init__(self, parent, bg="#f5f5f5")
+        self.controller = controller
+
+        self.source_root_var = tk.StringVar()
+        self.target_root_var = tk.StringVar()
+        self.table_name_var = tk.StringVar(value="Utilizations_KP")
+
+        tk.Label(self, text="Имя таблицы:", font=("Arial", 11), bg="#f5f5f5").pack(pady=(10, 0), padx=20, anchor="w")
+        tk.Entry(self, textvariable=self.table_name_var, width=40).pack(padx=20, anchor="w")
+
+        tk.Label(self, text="Папка SOURCE (mdb-источники):", font=("Arial", 11), bg="#f5f5f5").pack(pady=(10, 0), padx=20, anchor="w")
+        frame_src = tk.Frame(self, bg="#f5f5f5")
+        frame_src.pack(fill="x", padx=20)
+        tk.Entry(frame_src, textvariable=self.source_root_var, width=60).pack(side=tk.LEFT, fill="x", expand=True, padx=(0, 5))
+        tk.Button(frame_src, text="Выбрать", command=lambda: self._pick_dir(self.source_root_var)).pack(side=tk.LEFT)
+
+        tk.Label(self, text="Папка TARGET (mdb-приёмники):", font=("Arial", 11), bg="#f5f5f5").pack(pady=(10, 0), padx=20, anchor="w")
+        frame_tgt = tk.Frame(self, bg="#f5f5f5")
+        frame_tgt.pack(fill="x", padx=20)
+        tk.Entry(frame_tgt, textvariable=self.target_root_var, width=60).pack(side=tk.LEFT, fill="x", expand=True, padx=(0, 5))
+        tk.Button(frame_tgt, text="Выбрать", command=lambda: self._pick_dir(self.target_root_var)).pack(side=tk.LEFT)
+
+        tk.Button(self, text="▶ Запустить копирование",
+                  font=("Arial", 14, "bold"), bg="#87CEEB", fg="white",
+                  command=self._run).pack(pady=15)
+
+        self.progress_bar = ttk.Progressbar(self, orient="horizontal", mode="determinate", length=550)
+        self.progress_bar.pack(padx=20)
+
+        self.log = tk.Text(self, height=10, font=("Consolas", 9), state="disabled", bg="#1e1e1e", fg="#d4d4d4")
+        self.log.pack(fill="both", expand=True, padx=20, pady=10)
+
+    def _pick_dir(self, var):
+        d = filedialog.askdirectory()
+        if d:
+            var.set(d)
+
+    def _log(self, text):
+        self.log.configure(state="normal")
+        self.log.insert("end", text + "\n")
+        self.log.see("end")
+        self.log.configure(state="disabled")
+        self.update_idletasks()
+
+    def _collect_source(self, root):
+        result = {}
+        for dirpath, _, files in os.walk(root):
+            folder = os.path.basename(dirpath)
+            for f in files:
+                if f.lower().endswith(".mdb"):
+                    result[folder] = os.path.join(dirpath, f)
+        return result
+
+    def _find_target_mdb(self, root, folder_name):
+        matches = []
+        for dirpath, _, files in os.walk(root):
+            if folder_name in dirpath:
+                for f in files:
+                    if f.lower().endswith(".mdb"):
+                        matches.append(os.path.join(dirpath, f))
+        return matches
+
+    def _copy_table(self, source_mdb, target_mdb, table_name):
+        access = win32com.client.DispatchEx("Access.Application")
+        try:
+            access.OpenCurrentDatabase(target_mdb)
+            try:
+                access.DoCmd.DeleteObject(0, table_name)
+            except:
+                pass
+            access.DoCmd.TransferDatabase(0, "Microsoft Access", source_mdb, 0, table_name, table_name)
+        finally:
+            access.Quit()
+
+    def _run(self):
+        source_root = self.source_root_var.get().strip()
+        target_root = self.target_root_var.get().strip()
+        table_name  = self.table_name_var.get().strip()
+
+        if not os.path.isdir(source_root) or not os.path.isdir(target_root):
+            messagebox.showerror("Ошибка", "Укажите корректные папки SOURCE и TARGET!")
+            return
+        if not table_name:
+            messagebox.showerror("Ошибка", "Введите имя таблицы!")
+            return
+
+        self.log.configure(state="normal")
+        self.log.delete("1.0", "end")
+        self.log.configure(state="disabled")
+
+        source_map = self._collect_source(source_root)
+        if not source_map:
+            self._log("❌ SOURCE-файлы .mdb не найдены.")
+            return
+
+        self.progress_bar["maximum"] = len(source_map)
+        self.progress_bar["value"] = 0
+
+        for i, (folder_name, source_mdb) in enumerate(source_map.items(), 1):
+            target_list = self._find_target_mdb(target_root, folder_name)
+
+            if not target_list:
+                self._log(f"❌ Нет target для {folder_name}")
+                self.progress_bar["value"] = i
+                continue
+
+            self._log(f"\n🔄 {folder_name}")
+            self._log(f"   SOURCE: {source_mdb}")
+            self._log(f"   FOUND:  {len(target_list)} target(s)")
+
+            for target_mdb in target_list:
+                self._log(f"   → {target_mdb}")
+                try:
+                    self._copy_table(source_mdb, target_mdb, table_name)
+                    self._log("     ✅ OK")
+                except Exception as e:
+                    self._log(f"     ⚠️ ERROR: {e}")
+
+            self.progress_bar["value"] = i
+
+        self._log("\n✅ Готово.")
+        messagebox.showinfo("Готово", "Копирование таблиц завершено.")
+        self.progress_bar["value"] = 0
 
 # --- Запуск приложения ---
 if __name__ == "__main__":
