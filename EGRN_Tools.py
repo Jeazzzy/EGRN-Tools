@@ -2,11 +2,16 @@ import os
 import csv
 import zipfile
 import shutil
-import win32com.client
 import xml.etree.ElementTree as ET
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from tkinterdnd2 import DND_FILES, TkinterDnD
+
+try:
+    import pyodbc
+    PYODBC_AVAILABLE = True
+except ImportError:
+    PYODBC_AVAILABLE = False
 
 
 # --- Основной класс приложения ---
@@ -16,17 +21,14 @@ class Application(TkinterDnD.Tk):
         self.title("EGRN Tools")
         self.geometry("600x600")
 
-        # --- Контейнер для страниц ---
         container = tk.Frame(self)
         container.pack(side="bottom", fill="both", expand=True)
         container.grid_rowconfigure(0, weight=1)
         container.grid_columnconfigure(0, weight=1)
 
-        # --- Панель кнопок ---
         control_frame = tk.Frame(self, bg="#f0f0f0")
         control_frame.pack(side="top", fill="x")
 
-        # --- Словарь для страниц ---
         self.frames = {}
         for F in (XmlExtractorPage, ZipProcessorPage, MifProjectionPage, MdbCopyPage):
             page_name = F.__name__
@@ -34,7 +36,6 @@ class Application(TkinterDnD.Tk):
             self.frames[page_name] = frame
             frame.grid(row=0, column=0, sticky="nsew")
 
-        # --- Кнопки переключения ---
         button1 = ttk.Button(control_frame, text="XML → CSV",
                              command=lambda: self.show_frame("XmlExtractorPage"))
         button2 = ttk.Button(control_frame, text="Распаковка ZIP",
@@ -65,7 +66,6 @@ class XmlExtractorPage(tk.Frame):
         self.stats_var = tk.StringVar()
 
         tk.Label(self, text="Папка для обработки XML:", font=("Arial", 12)).pack(pady=(15, 5))
-
         frame_path = tk.Frame(self)
         frame_path.pack(fill="x", padx=20)
         self.entry = tk.Entry(frame_path, textvariable=self.source_dir_var, width=60)
@@ -82,7 +82,6 @@ class XmlExtractorPage(tk.Frame):
         stats_label = tk.Label(self, textvariable=self.stats_var, font=("Arial", 10), justify="left")
         stats_label.pack(pady=5, padx=20, anchor="w")
 
-        # Контекстное меню
         self.context_menu = tk.Menu(self, tearoff=0)
         self.context_menu.add_command(label="Вставить", command=lambda: self.entry.event_generate("<<Paste>>"))
         self.context_menu.add_command(label="Копировать", command=lambda: self.entry.event_generate("<<Copy>>"))
@@ -185,28 +184,20 @@ class ZipProcessorPage(tk.Frame):
         self.target_dir_var = tk.StringVar()
         self.stats_var = tk.StringVar()
 
-        tk.Label(self, text="Исходная папка с ZIP:", font=("Arial", 11), bg="#f5f5f5").pack(pady=(5, 0), padx=20,
-                                                                                            anchor="w")
+        tk.Label(self, text="Исходная папка с ZIP:", font=("Arial", 11), bg="#f5f5f5").pack(pady=(5, 0), padx=20, anchor="w")
         frame_source = tk.Frame(self, bg="#f5f5f5")
         frame_source.pack(fill="x", padx=20)
-        tk.Entry(frame_source, textvariable=self.source_dir_var, width=60).pack(side=tk.LEFT, fill="x", expand=True,
-                                                                                padx=(0, 5))
-        tk.Button(frame_source, text="Выбрать", command=lambda: self.select_directory(self.source_dir_var)).pack(
-            side=tk.LEFT)
+        tk.Entry(frame_source, textvariable=self.source_dir_var, width=60).pack(side=tk.LEFT, fill="x", expand=True, padx=(0, 5))
+        tk.Button(frame_source, text="Выбрать", command=lambda: self.select_directory(self.source_dir_var)).pack(side=tk.LEFT)
 
-        tk.Label(self, text="Целевая папка для результатов:", font=("Arial", 11), bg="#f5f5f5").pack(pady=(15, 0),
-                                                                                                     padx=20,
-                                                                                                     anchor="w")
+        tk.Label(self, text="Целевая папка для результатов:", font=("Arial", 11), bg="#f5f5f5").pack(pady=(15, 0), padx=20, anchor="w")
         frame_target = tk.Frame(self, bg="#f5f5f5")
         frame_target.pack(fill="x", padx=20)
-        tk.Entry(frame_target, textvariable=self.target_dir_var, width=60).pack(side=tk.LEFT, fill="x", expand=True,
-                                                                                padx=(0, 5))
-        tk.Button(frame_target, text="Выбрать", command=lambda: self.select_directory(self.target_dir_var)).pack(
-            side=tk.LEFT)
+        tk.Entry(frame_target, textvariable=self.target_dir_var, width=60).pack(side=tk.LEFT, fill="x", expand=True, padx=(0, 5))
+        tk.Button(frame_target, text="Выбрать", command=lambda: self.select_directory(self.target_dir_var)).pack(side=tk.LEFT)
 
         tk.Button(self, text="Распаковать и переименовать",
-                  font=("Arial", 14, 'bold'),
-                  bg="#87CEEB", fg="white",
+                  font=("Arial", 14, 'bold'), bg="#87CEEB", fg="white",
                   command=self.process_zip_files).pack(pady=25)
 
         self.progress_bar = ttk.Progressbar(self, orient="horizontal", mode="determinate", length=550)
@@ -215,16 +206,11 @@ class ZipProcessorPage(tk.Frame):
         self.zip_rename_label = tk.Label(
             self,
             text="Для быстрого переименовывания\nПеретащите ZIP/XML-файлы сюда",
-            bg="#E0FFFF",
-            width=60,
-            height=6,
-            relief="ridge"
+            bg="#E0FFFF", width=60, height=6, relief="ridge"
         )
         self.zip_rename_label.pack(pady=10)
-
         self.zip_rename_label.drop_target_register(DND_FILES)
         self.zip_rename_label.dnd_bind('<<Drop>>', self.drop_zip_rename)
-
 
         stats_label = tk.Label(self, textvariable=self.stats_var, font=("Arial", 10), justify="left", bg="#f5f5f5")
         stats_label.pack(pady=5, padx=20, anchor="w")
@@ -246,16 +232,13 @@ class ZipProcessorPage(tk.Frame):
     def get_cad_number_from_xml(self, xml_content):
         try:
             root = ET.fromstring(xml_content)
-
             cad_text = None
 
-            # Новый алгоритм для КПТ
             if root.tag == "extract_cadastral_plan_territory":
                 cad_element = root.find(".//cadastral_block/cadastral_number")
                 if cad_element is not None and cad_element.text:
                     cad_text = cad_element.text
 
-            # Старый алгоритм (fallback)
             if not cad_text:
                 common_data = root.find(".//common_data")
                 if common_data is not None:
@@ -265,9 +248,7 @@ class ZipProcessorPage(tk.Frame):
 
             if cad_text:
                 return cad_text.strip().replace(":", "_")
-
             return None
-
         except ET.ParseError:
             print("Ошибка: Не удалось распарсить XML.")
             return None
@@ -279,23 +260,20 @@ class ZipProcessorPage(tk.Frame):
         try:
             with zipfile.ZipFile(zip_path, 'r') as zf:
                 xml_info = next(
-                    (info for info in zf.infolist() if info.filename.lower().endswith('.xml')),
-                    None
+                    (info for info in zf.infolist() if info.filename.lower().endswith('.xml')), None
                 )
                 if not xml_info:
                     return f"XML не найден: {os.path.basename(zip_path)}"
-
                 with zf.open(xml_info) as xml_file:
                     xml_content = xml_file.read()
-                    cad_number = self.get_cad_number_from_xml(xml_content)
 
-                if not cad_number:
-                    return f"Кадастровый номер не найден: {os.path.basename(zip_path)}"
+            cad_number = self.get_cad_number_from_xml(xml_content)
+            if not cad_number:
+                return f"Кадастровый номер не найден: {os.path.basename(zip_path)}"
 
             folder = os.path.dirname(zip_path)
             base_name = cad_number
             new_path = os.path.join(folder, f"{base_name}.zip")
-
             i = 1
             while os.path.exists(new_path):
                 new_path = os.path.join(folder, f"{base_name}({i}).zip")
@@ -303,7 +281,6 @@ class ZipProcessorPage(tk.Frame):
 
             os.rename(zip_path, new_path)
             return f"Переименован: {os.path.basename(new_path)}"
-
         except Exception as e:
             return f"Ошибка {os.path.basename(zip_path)}: {e}"
 
@@ -319,7 +296,6 @@ class ZipProcessorPage(tk.Frame):
             folder = os.path.dirname(xml_path)
             base_name = cad_number
             new_path = os.path.join(folder, f"{base_name}.xml")
-
             i = 1
             while os.path.exists(new_path):
                 new_path = os.path.join(folder, f"{base_name}({i}).xml")
@@ -327,92 +303,19 @@ class ZipProcessorPage(tk.Frame):
 
             os.rename(xml_path, new_path)
             return f"XML переименован: {os.path.basename(new_path)}"
-
         except Exception as e:
             return f"Ошибка XML {os.path.basename(xml_path)}: {e}"
 
     def drop_zip_rename(self, event):
         files = self.master.tk.splitlist(event.data)
-
         for file in files:
-            file = file.strip("{}")  # важно для Windows путей с пробелами
-
+            file = file.strip("{}")
             if file.lower().endswith(".zip"):
-                # Проверяем, содержит ли ZIP другие ZIP файлы
-                temp_dir = os.path.join(os.path.dirname(file), "_temp_nested_extract")
-                os.makedirs(temp_dir, exist_ok=True)
-
-                original_name = os.path.basename(file)
-                backup_path = file + ".backup"
-
-                try:
-                    # Создаем backup исходного ZIP
-                    shutil.copy2(file, backup_path)
-
-                    with zipfile.ZipFile(file, 'r') as outer_zip:
-                        outer_zip.extractall(temp_dir)
-
-                    nested_zips = []
-                    for root, dirs, files_list in os.walk(temp_dir):
-                        for f in files_list:
-                            if f.lower().endswith('.zip'):
-                                nested_zips.append(os.path.join(root, f))
-
-                    if nested_zips:
-                        # Создаем новый ZIP с тем же именем
-                        with zipfile.ZipFile(file, 'w', zipfile.ZIP_DEFLATED) as new_zip:
-                            # Копируем все НЕ-ZIP файлы как есть
-                            for root, dirs, files_list in os.walk(temp_dir):
-                                for f in files_list:
-                                    full_path = os.path.join(root, f)
-                                    arcname = os.path.relpath(full_path, temp_dir)
-                                    if not f.lower().endswith('.zip'):
-                                        new_zip.write(full_path, arcname)
-
-                            # Добавляем переименованные ZIP
-                            for nested_zip_path in nested_zips:
-                                cad_number = self.get_cad_number_from_nested_zip(nested_zip_path)
-                                if cad_number:
-                                    new_name = f"{cad_number}.zip"
-                                    new_zip.write(nested_zip_path, new_name)
-                                    print(f"Заменен в архиве: {new_name}")
-                                else:
-                                    # Если КН не найден, добавляем как есть
-                                    arcname = os.path.relpath(nested_zip_path, temp_dir)
-                                    new_zip.write(nested_zip_path, arcname)
-
-                    print(f"Архив {original_name} обновлен!")
-                except Exception as e:
-                    print(f"Ошибка обработки {original_name}: {e}")
-                    # Восстанавливаем backup
-                    if os.path.exists(backup_path):
-                        shutil.move(backup_path, file)
-                finally:
-                    if os.path.exists(temp_dir):
-                        shutil.rmtree(temp_dir)
-                    if os.path.exists(backup_path):
-                        os.remove(backup_path)
-
+                result = self.rename_zip_by_cadastral(file)
+                print(result)
             elif file.lower().endswith(".xml"):
                 result = self.rename_xml_by_cadastral(file)
                 print(result)
-
-    def get_cad_number_from_nested_zip(self, zip_path):
-        """Извлекает кадастровый номер из ZIP без изменения файла"""
-        try:
-            with zipfile.ZipFile(zip_path, 'r') as zf:
-                xml_info = next(
-                    (info for info in zf.infolist() if info.filename.lower().endswith('.xml')),
-                    None
-                )
-                if not xml_info:
-                    return None
-
-                with zf.open(xml_info) as xml_file:
-                    xml_content = xml_file.read()
-                    return self.get_cad_number_from_xml(xml_content)
-        except:
-            return None
 
     def process_zip_files(self):
         source_dir = self.source_dir_var.get().strip()
@@ -428,9 +331,9 @@ class ZipProcessorPage(tk.Frame):
             return
 
         zip_out_dir, xml_out_dir, pdf_out_dir = self.create_output_dirs(target_dir)
-
         total_files = len(zip_files)
         success_count = 0
+
         self.progress_bar["maximum"] = total_files
         self.progress_bar["value"] = 0
         self.stats_var.set("Начало обработки...")
@@ -440,13 +343,14 @@ class ZipProcessorPage(tk.Frame):
         for index, filename in enumerate(zip_files, start=1):
             full_zip_path = os.path.join(source_dir, filename)
             cad_number = None
+
             try:
                 with zipfile.ZipFile(full_zip_path, 'r') as zf:
                     xml_info = next((info for info in zf.infolist() if info.filename.lower().endswith('.xml')), None)
                     if xml_info:
                         with zf.open(xml_info) as xml_file:
                             xml_content = xml_file.read()
-                            cad_number = self.get_cad_number_from_xml(xml_content)
+                        cad_number = self.get_cad_number_from_xml(xml_content)
 
                     if cad_number:
                         new_base_name = cad_number
@@ -460,9 +364,11 @@ class ZipProcessorPage(tk.Frame):
                                 shutil.move(src_path, os.path.join(xml_out_dir, f"{new_base_name}.xml"))
                             elif extracted_file.lower().endswith(".pdf"):
                                 shutil.move(src_path, os.path.join(pdf_out_dir, f"{new_base_name}.pdf"))
+
                         success_count += 1
                     else:
                         print(f"Пропуск {filename}: Кадастровый номер не найден.")
+
             except Exception as e:
                 print(f"Ошибка при обработке {filename}: {e}")
             finally:
@@ -490,16 +396,10 @@ class MifProjectionPage(tk.Frame):
         self.mif_files = []
 
         self.label = tk.Label(
-            self,
-            text="Перетащите MIF файлы сюда",
-            font=("Arial", 12),
-            bg="#E0FFFF",
-            width=50,
-            height=10,
-            relief="ridge"
+            self, text="Перетащите MIF файлы сюда",
+            font=("Arial", 12), bg="#E0FFFF", width=50, height=10, relief="ridge"
         )
         self.label.pack(pady=20)
-
         self.label.drop_target_register(DND_FILES)
         self.label.dnd_bind('<<Drop>>', self.drop_files)
 
@@ -509,14 +409,11 @@ class MifProjectionPage(tk.Frame):
 
         btn_frame = tk.Frame(self, bg="#f5f5f5")
         btn_frame.pack(pady=10)
-
         tk.Button(btn_frame, text="Очистить файлы",
-                  font=("Arial", 14, 'bold'),
-                  bg="#C0C0C0", fg="white",
+                  font=("Arial", 14, 'bold'), bg="#C0C0C0", fg="white",
                   command=self.clear_files).pack(side=tk.LEFT, padx=10)
         tk.Button(btn_frame, text="Исправить пределы",
-                  font=("Arial", 14, 'bold'),
-                  bg="#87CEEB", fg="white",
+                  font=("Arial", 14, 'bold'), bg="#87CEEB", fg="white",
                   command=self.change_projection).pack(side=tk.LEFT, padx=10)
 
     def drop_files(self, event):
@@ -539,7 +436,6 @@ class MifProjectionPage(tk.Frame):
             try:
                 with open(file_path, "r", encoding="utf-8") as f:
                     lines = f.readlines()
-
                 with open(file_path, "w", encoding="utf-8") as f:
                     for line in lines:
                         if line.strip().startswith("CoordSys"):
@@ -551,7 +447,8 @@ class MifProjectionPage(tk.Frame):
 
         messagebox.showinfo("Готово", f"Проекция изменена для {len(self.mif_files)} файлов.")
 
-# --- 4. Копирование таблицы MDB ---
+
+# --- 4. Копирование таблицы MDB (через pyodbc, без MS Access) ---
 class MdbCopyPage(tk.Frame):
     def __init__(self, parent, controller):
         tk.Frame.__init__(self, parent, bg="#f5f5f5")
@@ -560,6 +457,15 @@ class MdbCopyPage(tk.Frame):
         self.source_root_var = tk.StringVar()
         self.target_root_var = tk.StringVar()
         self.table_name_var = tk.StringVar(value="Utilizations_KP")
+
+        # Предупреждение если pyodbc не установлен
+        if not PYODBC_AVAILABLE:
+            tk.Label(
+                self,
+                text="⚠️ Модуль pyodbc не установлен.\nВыполните: pip install pyodbc",
+                font=("Arial", 11), bg="#fff3cd", fg="#856404",
+                relief="ridge", padx=10, pady=6
+            ).pack(fill="x", padx=20, pady=(10, 0))
 
         tk.Label(self, text="Имя таблицы:", font=("Arial", 11), bg="#f5f5f5").pack(pady=(10, 0), padx=20, anchor="w")
         tk.Entry(self, textvariable=self.table_name_var, width=40).pack(padx=20, anchor="w")
@@ -576,15 +482,19 @@ class MdbCopyPage(tk.Frame):
         tk.Entry(frame_tgt, textvariable=self.target_root_var, width=60).pack(side=tk.LEFT, fill="x", expand=True, padx=(0, 5))
         tk.Button(frame_tgt, text="Выбрать", command=lambda: self._pick_dir(self.target_root_var)).pack(side=tk.LEFT)
 
-        tk.Button(self, text="▶ Запустить копирование",
-                  font=("Arial", 14, "bold"), bg="#87CEEB", fg="white",
-                  command=self._run).pack(pady=15)
+        tk.Button(
+            self, text="▶ Запустить копирование",
+            font=("Arial", 14, "bold"), bg="#87CEEB", fg="white",
+            command=self._run
+        ).pack(pady=15)
 
         self.progress_bar = ttk.Progressbar(self, orient="horizontal", mode="determinate", length=550)
         self.progress_bar.pack(padx=20)
 
         self.log = tk.Text(self, height=10, font=("Consolas", 9), state="disabled", bg="#1e1e1e", fg="#d4d4d4")
         self.log.pack(fill="both", expand=True, padx=20, pady=10)
+
+    # ── вспомогательные ──────────────────────────────────────────────────────
 
     def _pick_dir(self, var):
         d = filedialog.askdirectory()
@@ -598,7 +508,17 @@ class MdbCopyPage(tk.Frame):
         self.log.configure(state="disabled")
         self.update_idletasks()
 
+    def _get_conn(self, mdb_path):
+        conn_str = (
+            r"DRIVER={Microsoft Access Driver (*.mdb, *.accdb)};"
+            f"DBQ={mdb_path};"
+        )
+        return pyodbc.connect(conn_str, autocommit=False)
+
+    # ── логика MDB ────────────────────────────────────────────────────────────
+
     def _collect_source(self, root):
+        """Возвращает {имя_папки: путь_к_mdb} — по одному mdb на папку."""
         result = {}
         for dirpath, _, files in os.walk(root):
             folder = os.path.basename(dirpath)
@@ -608,6 +528,7 @@ class MdbCopyPage(tk.Frame):
         return result
 
     def _find_target_mdb(self, root, folder_name):
+        """Находит все mdb в target, путь которых содержит имя папки-источника."""
         matches = []
         for dirpath, _, files in os.walk(root):
             if folder_name in dirpath:
@@ -617,18 +538,79 @@ class MdbCopyPage(tk.Frame):
         return matches
 
     def _copy_table(self, source_mdb, target_mdb, table_name):
-        access = win32com.client.DispatchEx("Access.Application")
+        """Копирует таблицу из source_mdb в target_mdb через pyodbc (без MS Access)."""
+        src = self._get_conn(source_mdb)
+        tgt = self._get_conn(target_mdb)
+
         try:
-            access.OpenCurrentDatabase(target_mdb)
+            src_cur = src.cursor()
+            tgt_cur = tgt.cursor()
+
+            # Читаем данные из источника
+            src_cur.execute(f"SELECT * FROM [{table_name}]")
+            rows = src_cur.fetchall()
+            col_names = [d[0] for d in src_cur.description]
+
+            # Получаем информацию о типах колонок
+            cols_info = src_cur.columns(table=table_name).fetchall()
+
+            # Удаляем таблицу в target (если существует)
             try:
-                access.DoCmd.DeleteObject(0, table_name)
-            except:
-                pass
-            access.DoCmd.TransferDatabase(0, "Microsoft Access", source_mdb, 0, table_name, table_name)
+                tgt_cur.execute(f"DROP TABLE [{table_name}]")
+                tgt.commit()
+            except Exception:
+                tgt.rollback()
+
+            # Маппинг типов ODBC → Jet SQL
+            type_map = {
+                "COUNTER":    "AUTOINCREMENT",
+                "LONGCHAR":   "LONGTEXT",
+                "VARCHAR":    "TEXT",
+                "CHAR":       "TEXT",
+                "INTEGER":    "INTEGER",
+                "SMALLINT":   "SMALLINT",
+                "BYTE":       "BYTE",
+                "DOUBLE":     "DOUBLE",
+                "SINGLE":     "SINGLE",
+                "CURRENCY":   "CURRENCY",
+                "DATETIME":   "DATETIME",
+                "BIT":        "YESNO",
+                "LONGBINARY": "LONGBINARY",
+            }
+
+            col_defs = []
+            for col in cols_info:
+                jet_type = type_map.get(col.type_name.upper(), "TEXT")
+                if jet_type == "TEXT" and col.column_size and col.column_size <= 255:
+                    col_defs.append(f"[{col.column_name}] TEXT({col.column_size})")
+                else:
+                    col_defs.append(f"[{col.column_name}] {jet_type}")
+
+            # Создаём таблицу в target
+            tgt_cur.execute(f"CREATE TABLE [{table_name}] ({', '.join(col_defs)})")
+            tgt.commit()
+
+            # Вставляем строки
+            if rows:
+                placeholders = ", ".join(["?" for _ in col_names])
+                col_names_sql = ", ".join([f"[{n}]" for n in col_names])
+                tgt_cur.executemany(
+                    f"INSERT INTO [{table_name}] ({col_names_sql}) VALUES ({placeholders})",
+                    rows
+                )
+                tgt.commit()
+
         finally:
-            access.Quit()
+            src.close()
+            tgt.close()
+
+    # ── обработчик кнопки ─────────────────────────────────────────────────────
 
     def _run(self):
+        if not PYODBC_AVAILABLE:
+            messagebox.showerror("Ошибка", "Установите pyodbc:\n\npip install pyodbc")
+            return
+
         source_root = self.source_root_var.get().strip()
         target_root = self.target_root_var.get().strip()
         table_name  = self.table_name_var.get().strip()
@@ -640,6 +622,7 @@ class MdbCopyPage(tk.Frame):
             messagebox.showerror("Ошибка", "Введите имя таблицы!")
             return
 
+        # Очищаем лог
         self.log.configure(state="normal")
         self.log.delete("1.0", "end")
         self.log.configure(state="disabled")
@@ -677,6 +660,7 @@ class MdbCopyPage(tk.Frame):
         self._log("\n✅ Готово.")
         messagebox.showinfo("Готово", "Копирование таблиц завершено.")
         self.progress_bar["value"] = 0
+
 
 # --- Запуск приложения ---
 if __name__ == "__main__":
