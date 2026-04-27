@@ -467,7 +467,7 @@ class MdbCopyPage(tk.Frame):
         "дп":           "дачного поселка",
         "ж/д_будка":    "железнодорожной будки",
         "ж/д_казарм":   "железнодорожной казармы",
-        "ж/д_оп":       "ж/д остановочного (обгонного) пункта",
+        "ж/д_оп":       "железнодорожного остановочного (обгонного) пункта",
         "ж/д_платф":    "железнодорожной платформы",
         "ж/д_пост":     "железнодорожного поста",
         "ж/д_рзд":      "железнодорожного разъезда",
@@ -510,7 +510,7 @@ class MdbCopyPage(tk.Frame):
         "выселки(ок)":                              "выселок",
         "железнодорожная будка":                    "железнодорожной будки",
         "железнодорожная казарма":                  "железнодорожной казармы",
-        "ж/д остановочный (обгонный) пункт":        "ж/д остановочного (обгонного) пункта",
+        "ж/д остановочный (обгонный) пункт":        "железнодорожного остановочного (обгонного) пункта",
         "железнодорожная платформа":                "железнодорожной платформы",
         "железнодорожный пост":                     "железнодорожного поста",
         "железнодорожный разъезд":                  "железнодорожного разъезда",
@@ -750,45 +750,27 @@ class MdbCopyPage(tk.Frame):
     # ── Копирование таблицы ──────────────────────────────────────────────────
 
     def _copy_table(self, source_mdb, target_mdb, table_name):
-        """Копирует таблицу из source_mdb в target_mdb через pyodbc."""
+        """
+        Заменяет содержимое таблицы в target данными из source.
+        Структура таблицы в target не трогается — только DELETE + INSERT,
+        чтобы сохранить оригинальные типы и размеры колонок.
+        """
         src = self._get_conn(source_mdb)
         tgt = self._get_conn(target_mdb)
         try:
             src_cur = src.cursor()
             tgt_cur = tgt.cursor()
 
+            # Читаем все данные из источника
             src_cur.execute(f"SELECT * FROM [{table_name}]")
             rows      = src_cur.fetchall()
             col_names = [d[0] for d in src_cur.description]
-            cols_info = src_cur.columns(table=table_name).fetchall()
 
-            try:
-                tgt_cur.execute(f"DROP TABLE [{table_name}]")
-                tgt.commit()
-            except Exception:
-                tgt.rollback()
-
-            type_map = {
-                "COUNTER":    "AUTOINCREMENT", "LONGCHAR":   "LONGTEXT",
-                "VARCHAR":    "TEXT",          "CHAR":       "TEXT",
-                "INTEGER":    "INTEGER",       "SMALLINT":   "SMALLINT",
-                "BYTE":       "BYTE",          "DOUBLE":     "DOUBLE",
-                "SINGLE":     "SINGLE",        "CURRENCY":   "CURRENCY",
-                "DATETIME":   "DATETIME",      "BIT":        "YESNO",
-                "LONGBINARY": "LONGBINARY",
-            }
-
-            col_defs = []
-            for col in cols_info:
-                jet_type = type_map.get(col.type_name.upper(), "TEXT")
-                if jet_type == "TEXT" and col.column_size and col.column_size <= 255:
-                    col_defs.append(f"[{col.column_name}] TEXT({col.column_size})")
-                else:
-                    col_defs.append(f"[{col.column_name}] {jet_type}")
-
-            tgt_cur.execute(f"CREATE TABLE [{table_name}] ({', '.join(col_defs)})")
+            # Очищаем таблицу в target, не трогая структуру
+            tgt_cur.execute(f"DELETE FROM [{table_name}]")
             tgt.commit()
 
+            # Вставляем строки из источника
             if rows:
                 placeholders  = ", ".join(["?" for _ in col_names])
                 col_names_sql = ", ".join([f"[{n}]" for n in col_names])
@@ -856,10 +838,10 @@ class MdbCopyPage(tk.Frame):
             pk_col  = cols[0]
             rows    = cur.fetchall()
             pattern = re.compile(
-                r"(в\s+границах\s+).+?(\s+муниципального\s+образования)",
+                r"в\s+границах\s+.+?\s+муниципального\s+образования",
                 re.IGNORECASE | re.DOTALL
             )
-            repl = rf"\g<1>{type_genitive} {name}\g<2>"
+            repl = f"в границах {type_genitive} {name} муниципального образования"
 
             for row in rows:
                 row_dict = dict(zip(cols, row))
