@@ -1,4 +1,5 @@
 import os
+import re
 import csv
 import zipfile
 import shutil
@@ -19,7 +20,7 @@ class Application(TkinterDnD.Tk):
     def __init__(self, *args, **kwargs):
         TkinterDnD.Tk.__init__(self, *args, **kwargs)
         self.title("EGRN Tools")
-        self.geometry("600x600")
+        self.geometry("600x640")
 
         container = tk.Frame(self)
         container.pack(side="bottom", fill="both", expand=True)
@@ -448,17 +449,120 @@ class MifProjectionPage(tk.Frame):
         messagebox.showinfo("Готово", f"Проекция изменена для {len(self.mif_files)} файлов.")
 
 
-# --- 4. Копирование таблицы MDB (через pyodbc, без MS Access) ---
+# --- 4. Копирование/обновление MDB ---
 class MdbCopyPage(tk.Frame):
+
+    # Родительный падеж для всех типов НП (ID-коды и полные названия)
+    TYPE_GENITIVE = {
+        # ID-коды
+        "аал":          "аала",
+        "автодорога":   "автодороги",
+        "арбан":        "арбана",
+        "аул":          "аула",
+        "волость":      "волости",
+        "высел":        "выселок",
+        "г":            "города",
+        "городок":      "городка",
+        "д":            "деревни",
+        "дп":           "дачного поселка",
+        "ж/д_будка":    "железнодорожной будки",
+        "ж/д_казарм":   "железнодорожной казармы",
+        "ж/д_оп":       "ж/д остановочного (обгонного) пункта",
+        "ж/д_платф":    "железнодорожной платформы",
+        "ж/д_пост":     "железнодорожного поста",
+        "ж/д_рзд":      "железнодорожного разъезда",
+        "ж/д_ст":       "железнодорожной станции",
+        "жилзона":      "жилой зоны",
+        "жилрайон":     "жилого района",
+        "заимка":       "заимки",
+        "казарма":      "казармы",
+        "кв-л":         "квартала",
+        "кордон":       "кордона",
+        "кп":           "курортного поселка",
+        "лпх":          "леспромхоза",
+        "м":            "местечка",
+        "массив":       "массива",
+        "мкр":          "микрорайона",
+        "нп":           "населенного пункта",
+        "остров":       "острова",
+        "п":            "поселка",
+        "п/о":          "почтового отделения",
+        "п/р":          "планировочного района",
+        "п/ст":         "поселка и(при) станции(и)",
+        "пгт":          "поселка городского типа",
+        "погост":       "погоста",
+        "починок":      "починка",
+        "промзона":     "промышленной зоны",
+        "рзд":          "разъезда",
+        "рп":           "рабочего поселка",
+        "с":            "села",
+        "сл":           "слободы",
+        "снт":          "садового некоммерческого товарищества",
+        "ст":           "станции",
+        "ст-ца":        "станицы",
+        "тер":          "территории",
+        "у":            "улуса",
+        "х":            "хутора",
+        # Полные названия (на случай если в БД хранятся они)
+        "город":                                    "города",
+        "деревня":                                  "деревни",
+        "дачный поселок":                           "дачного поселка",
+        "выселки(ок)":                              "выселок",
+        "железнодорожная будка":                    "железнодорожной будки",
+        "железнодорожная казарма":                  "железнодорожной казармы",
+        "ж/д остановочный (обгонный) пункт":        "ж/д остановочного (обгонного) пункта",
+        "железнодорожная платформа":                "железнодорожной платформы",
+        "железнодорожный пост":                     "железнодорожного поста",
+        "железнодорожный разъезд":                  "железнодорожного разъезда",
+        "железнодорожная станция":                  "железнодорожной станции",
+        "жилая зона":                               "жилой зоны",
+        "жилой район":                              "жилого района",
+        "квартал":                                  "квартала",
+        "курортный поселок":                        "курортного поселка",
+        "леспромхоз":                               "леспромхоза",
+        "местечко":                                 "местечка",
+        "микрорайон":                               "микрорайона",
+        "населенный пункт":                         "населенного пункта",
+        "поселок":                                  "поселка",
+        "почтовое отделение":                       "почтового отделения",
+        "планировочный район":                      "планировочного района",
+        "поселок и(при) станция(и)":                "поселка и(при) станции(и)",
+        "поселок городского типа":                  "поселка городского типа",
+        "промышленная зона":                        "промышленной зоны",
+        "разъезд":                                  "разъезда",
+        "рабочий поселок":                          "рабочего поселка",
+        "село":                                     "села",
+        "слобода":                                  "слободы",
+        "садовое некоммерческое товарищество":      "садового некоммерческого товарищества",
+        "станция":                                  "станции",
+        "станица":                                  "станицы",
+        "территория":                               "территории",
+        "улус":                                     "улуса",
+        "хутор":                                    "хутора",
+    }
+
+    MODE_VRI    = "ври"
+    MODE_FIAS   = "фиас"
+    MODE_TEXT   = "текст"
+    MODE_CUSTOM = "своё"
+
     def __init__(self, parent, controller):
         tk.Frame.__init__(self, parent, bg="#f5f5f5")
         self.controller = controller
 
-        self.source_root_var = tk.StringVar()
-        self.target_root_var = tk.StringVar()
-        self.table_name_var = tk.StringVar(value="Utilizations_KP")
+        # Переменные для всех четырёх режимов
+        self.mode_var          = tk.StringVar(value=self.MODE_VRI)
+        # ВРИ / Своё: source папка + target папка
+        self.vri_source_var    = tk.StringVar()
+        self.vri_target_var    = tk.StringVar()
+        self.custom_table_var  = tk.StringVar()
+        # ФИАС: один source mdb + target папка
+        self.fias_mdb_var      = tk.StringVar()
+        self.fias_target_var   = tk.StringVar()
+        # Адрес в тексте: одна папка с mdb
+        self.text_folder_var   = tk.StringVar()
 
-        # Предупреждение если pyodbc не установлен
+        # ── Предупреждение pyodbc ────────────────────────────────────────────
         if not PYODBC_AVAILABLE:
             tk.Label(
                 self,
@@ -467,39 +571,129 @@ class MdbCopyPage(tk.Frame):
                 relief="ridge", padx=10, pady=6
             ).pack(fill="x", padx=20, pady=(10, 0))
 
-        tk.Label(self, text="Имя таблицы:", font=("Arial", 11), bg="#f5f5f5").pack(pady=(10, 0), padx=20, anchor="w")
-        tk.Entry(self, textvariable=self.table_name_var, width=40).pack(padx=20, anchor="w")
+        # ── Выбор режима (радиокнопки) ───────────────────────────────────────
+        mode_frame = tk.LabelFrame(
+            self, text="Режим работы", font=("Arial", 11, "bold"),
+            bg="#f5f5f5", padx=10, pady=4
+        )
+        mode_frame.pack(fill="x", padx=20, pady=(10, 4))
 
-        tk.Label(self, text="Папка SOURCE (mdb-источники):", font=("Arial", 11), bg="#f5f5f5").pack(pady=(10, 0), padx=20, anchor="w")
-        frame_src = tk.Frame(self, bg="#f5f5f5")
-        frame_src.pack(fill="x", padx=20)
-        tk.Entry(frame_src, textvariable=self.source_root_var, width=60).pack(side=tk.LEFT, fill="x", expand=True, padx=(0, 5))
-        tk.Button(frame_src, text="Выбрать", command=lambda: self._pick_dir(self.source_root_var)).pack(side=tk.LEFT)
+        modes = [
+            (self.MODE_VRI,    "ВРИ"),
+            (self.MODE_FIAS,   "Адрес по ФИАС"),
+            (self.MODE_TEXT,   "Адрес в тексте"),
+            (self.MODE_CUSTOM, "Своё"),
+        ]
+        for val, label in modes:
+            tk.Radiobutton(
+                mode_frame, text=label, variable=self.mode_var, value=val,
+                bg="#f5f5f5", font=("Arial", 11),
+                command=self._on_mode_change
+            ).pack(side=tk.LEFT, padx=12, pady=2)
 
-        tk.Label(self, text="Папка TARGET (mdb-приёмники):", font=("Arial", 11), bg="#f5f5f5").pack(pady=(10, 0), padx=20, anchor="w")
-        frame_tgt = tk.Frame(self, bg="#f5f5f5")
-        frame_tgt.pack(fill="x", padx=20)
-        tk.Entry(frame_tgt, textvariable=self.target_root_var, width=60).pack(side=tk.LEFT, fill="x", expand=True, padx=(0, 5))
-        tk.Button(frame_tgt, text="Выбрать", command=lambda: self._pick_dir(self.target_root_var)).pack(side=tk.LEFT)
+        # ══════════════════════════════════════════════════════════════════════
+        # Панель ВРИ / Своё: source папка + target папка [+ имя таблицы]
+        # ══════════════════════════════════════════════════════════════════════
+        self.panel_vri = tk.Frame(self, bg="#f5f5f5")
 
-        tk.Button(
-            self, text="▶ Запустить копирование",
+        tk.Label(self.panel_vri, text="Папка SOURCE (папки с mdb-источниками):",
+                 font=("Arial", 11), bg="#f5f5f5").pack(pady=(6, 0), padx=4, anchor="w")
+        fr = tk.Frame(self.panel_vri, bg="#f5f5f5"); fr.pack(fill="x", padx=4)
+        tk.Entry(fr, textvariable=self.vri_source_var, width=58).pack(side=tk.LEFT, fill="x", expand=True, padx=(0, 5))
+        tk.Button(fr, text="Выбрать", command=lambda: self._pick_dir(self.vri_source_var)).pack(side=tk.LEFT)
+
+        tk.Label(self.panel_vri, text="Папка TARGET (папки с mdb-приёмниками):",
+                 font=("Arial", 11), bg="#f5f5f5").pack(pady=(8, 0), padx=4, anchor="w")
+        fr2 = tk.Frame(self.panel_vri, bg="#f5f5f5"); fr2.pack(fill="x", padx=4)
+        tk.Entry(fr2, textvariable=self.vri_target_var, width=58).pack(side=tk.LEFT, fill="x", expand=True, padx=(0, 5))
+        tk.Button(fr2, text="Выбрать", command=lambda: self._pick_dir(self.vri_target_var)).pack(side=tk.LEFT)
+
+        # Поле имени таблицы — видно только в режиме «Своё»
+        self.custom_name_frame = tk.Frame(self.panel_vri, bg="#f5f5f5")
+        tk.Label(self.custom_name_frame, text="Имя таблицы:",
+                 font=("Arial", 11), bg="#f5f5f5").pack(anchor="w", pady=(8, 0), padx=4)
+        tk.Entry(self.custom_name_frame, textvariable=self.custom_table_var, width=40).pack(anchor="w", padx=4)
+
+        # ══════════════════════════════════════════════════════════════════════
+        # Панель ФИАС: один mdb-файл + target папка
+        # ══════════════════════════════════════════════════════════════════════
+        self.panel_fias = tk.Frame(self, bg="#f5f5f5")
+
+        tk.Label(self.panel_fias,
+                 text="Source MDB (файл с обновлённой таблицей Locations):",
+                 font=("Arial", 11), bg="#f5f5f5").pack(pady=(6, 0), padx=4, anchor="w")
+        fr3 = tk.Frame(self.panel_fias, bg="#f5f5f5"); fr3.pack(fill="x", padx=4)
+        tk.Entry(fr3, textvariable=self.fias_mdb_var, width=58).pack(side=tk.LEFT, fill="x", expand=True, padx=(0, 5))
+        tk.Button(fr3, text="Выбрать", command=self._pick_fias_mdb).pack(side=tk.LEFT)
+
+        tk.Label(self.panel_fias,
+                 text="Папка TARGET (все mdb внутри получат обновлённую Locations):",
+                 font=("Arial", 11), bg="#f5f5f5").pack(pady=(8, 0), padx=4, anchor="w")
+        fr4 = tk.Frame(self.panel_fias, bg="#f5f5f5"); fr4.pack(fill="x", padx=4)
+        tk.Entry(fr4, textvariable=self.fias_target_var, width=58).pack(side=tk.LEFT, fill="x", expand=True, padx=(0, 5))
+        tk.Button(fr4, text="Выбрать", command=lambda: self._pick_dir(self.fias_target_var)).pack(side=tk.LEFT)
+
+        # ══════════════════════════════════════════════════════════════════════
+        # Панель «Адрес в тексте»: папка с mdb (каждый сам себя обновляет)
+        # ══════════════════════════════════════════════════════════════════════
+        self.panel_text = tk.Frame(self, bg="#f5f5f5")
+
+        tk.Label(self.panel_text,
+                 text="Папка с mdb-файлами для обновления:",
+                 font=("Arial", 11), bg="#f5f5f5").pack(pady=(6, 0), padx=4, anchor="w")
+        tk.Label(self.panel_text,
+                 text="Каждый mdb читает свою таблицу Locations и обновляет\n"
+                      "колонку Объект_ЗУ в таблице Титульный_картаплан.",
+                 font=("Arial", 9), bg="#f5f5f5", fg="#555").pack(padx=4, anchor="w")
+        fr5 = tk.Frame(self.panel_text, bg="#f5f5f5"); fr5.pack(fill="x", padx=4)
+        tk.Entry(fr5, textvariable=self.text_folder_var, width=58).pack(side=tk.LEFT, fill="x", expand=True, padx=(0, 5))
+        tk.Button(fr5, text="Выбрать", command=lambda: self._pick_dir(self.text_folder_var)).pack(side=tk.LEFT)
+
+        # ── Кнопка запуска ───────────────────────────────────────────────────
+        self.run_btn = tk.Button(
+            self, text="▶ Запустить",
             font=("Arial", 14, "bold"), bg="#87CEEB", fg="white",
             command=self._run
-        ).pack(pady=15)
+        )
+        self.run_btn.pack(pady=10)
 
         self.progress_bar = ttk.Progressbar(self, orient="horizontal", mode="determinate", length=550)
         self.progress_bar.pack(padx=20)
 
-        self.log = tk.Text(self, height=10, font=("Consolas", 9), state="disabled", bg="#1e1e1e", fg="#d4d4d4")
-        self.log.pack(fill="both", expand=True, padx=20, pady=10)
+        self.log = tk.Text(self, height=10, font=("Consolas", 9),
+                           state="disabled", bg="#1e1e1e", fg="#d4d4d4")
+        self.log.pack(fill="both", expand=True, padx=20, pady=8)
 
-    # ── вспомогательные ──────────────────────────────────────────────────────
+        # Показать начальную панель
+        self._on_mode_change()
+
+    # ── UI-хелперы ───────────────────────────────────────────────────────────
+
+    def _on_mode_change(self):
+        """Показывает нужную панель в зависимости от выбранного режима."""
+        for panel in (self.panel_vri, self.panel_fias, self.panel_text):
+            panel.pack_forget()
+        self.custom_name_frame.pack_forget()
+
+        mode = self.mode_var.get()
+        if mode in (self.MODE_VRI, self.MODE_CUSTOM):
+            self.panel_vri.pack(fill="x", padx=16, before=self.run_btn)
+            if mode == self.MODE_CUSTOM:
+                self.custom_name_frame.pack(fill="x", padx=0)
+        elif mode == self.MODE_FIAS:
+            self.panel_fias.pack(fill="x", padx=16, before=self.run_btn)
+        elif mode == self.MODE_TEXT:
+            self.panel_text.pack(fill="x", padx=16, before=self.run_btn)
 
     def _pick_dir(self, var):
         d = filedialog.askdirectory()
         if d:
             var.set(d)
+
+    def _pick_fias_mdb(self):
+        f = filedialog.askopenfilename(filetypes=[("MDB files", "*.mdb")])
+        if f:
+            self.fias_mdb_var.set(f)
 
     def _log(self, text):
         self.log.configure(state="normal")
@@ -508,6 +702,13 @@ class MdbCopyPage(tk.Frame):
         self.log.configure(state="disabled")
         self.update_idletasks()
 
+    def _log_clear(self):
+        self.log.configure(state="normal")
+        self.log.delete("1.0", "end")
+        self.log.configure(state="disabled")
+
+    # ── Подключение MDB ──────────────────────────────────────────────────────
+
     def _get_conn(self, mdb_path):
         conn_str = (
             r"DRIVER={Microsoft Access Driver (*.mdb, *.accdb)};"
@@ -515,10 +716,10 @@ class MdbCopyPage(tk.Frame):
         )
         return pyodbc.connect(conn_str, autocommit=False)
 
-    # ── логика MDB ────────────────────────────────────────────────────────────
+    # ── Сбор файлов ──────────────────────────────────────────────────────────
 
-    def _collect_source(self, root):
-        """Возвращает {имя_папки: путь_к_mdb} — по одному mdb на папку."""
+    def _collect_source_by_folder(self, root):
+        """ВРИ/Своё: {имя_подпапки: путь_к_mdb} — по одному mdb на подпапку."""
         result = {}
         for dirpath, _, files in os.walk(root):
             folder = os.path.basename(dirpath)
@@ -527,8 +728,8 @@ class MdbCopyPage(tk.Frame):
                     result[folder] = os.path.join(dirpath, f)
         return result
 
-    def _find_target_mdb(self, root, folder_name):
-        """Находит все mdb в target, путь которых содержит имя папки-источника."""
+    def _find_target_by_folder(self, root, folder_name):
+        """ВРИ/Своё: все mdb в target, путь которых содержит имя папки-источника."""
         matches = []
         for dirpath, _, files in os.walk(root):
             if folder_name in dirpath:
@@ -537,44 +738,43 @@ class MdbCopyPage(tk.Frame):
                         matches.append(os.path.join(dirpath, f))
         return matches
 
+    def _collect_all_mdb(self, root):
+        """Адрес в тексте / ФИАС-target: все mdb рекурсивно."""
+        result = []
+        for dirpath, _, files in os.walk(root):
+            for f in files:
+                if f.lower().endswith(".mdb"):
+                    result.append(os.path.join(dirpath, f))
+        return result
+
+    # ── Копирование таблицы ──────────────────────────────────────────────────
+
     def _copy_table(self, source_mdb, target_mdb, table_name):
-        """Копирует таблицу из source_mdb в target_mdb через pyodbc (без MS Access)."""
+        """Копирует таблицу из source_mdb в target_mdb через pyodbc."""
         src = self._get_conn(source_mdb)
         tgt = self._get_conn(target_mdb)
-
         try:
             src_cur = src.cursor()
             tgt_cur = tgt.cursor()
 
-            # Читаем данные из источника
             src_cur.execute(f"SELECT * FROM [{table_name}]")
-            rows = src_cur.fetchall()
+            rows      = src_cur.fetchall()
             col_names = [d[0] for d in src_cur.description]
-
-            # Получаем информацию о типах колонок
             cols_info = src_cur.columns(table=table_name).fetchall()
 
-            # Удаляем таблицу в target (если существует)
             try:
                 tgt_cur.execute(f"DROP TABLE [{table_name}]")
                 tgt.commit()
             except Exception:
                 tgt.rollback()
 
-            # Маппинг типов ODBC → Jet SQL
             type_map = {
-                "COUNTER":    "AUTOINCREMENT",
-                "LONGCHAR":   "LONGTEXT",
-                "VARCHAR":    "TEXT",
-                "CHAR":       "TEXT",
-                "INTEGER":    "INTEGER",
-                "SMALLINT":   "SMALLINT",
-                "BYTE":       "BYTE",
-                "DOUBLE":     "DOUBLE",
-                "SINGLE":     "SINGLE",
-                "CURRENCY":   "CURRENCY",
-                "DATETIME":   "DATETIME",
-                "BIT":        "YESNO",
+                "COUNTER":    "AUTOINCREMENT", "LONGCHAR":   "LONGTEXT",
+                "VARCHAR":    "TEXT",          "CHAR":       "TEXT",
+                "INTEGER":    "INTEGER",       "SMALLINT":   "SMALLINT",
+                "BYTE":       "BYTE",          "DOUBLE":     "DOUBLE",
+                "SINGLE":     "SINGLE",        "CURRENCY":   "CURRENCY",
+                "DATETIME":   "DATETIME",      "BIT":        "YESNO",
                 "LONGBINARY": "LONGBINARY",
             }
 
@@ -586,79 +786,212 @@ class MdbCopyPage(tk.Frame):
                 else:
                     col_defs.append(f"[{col.column_name}] {jet_type}")
 
-            # Создаём таблицу в target
             tgt_cur.execute(f"CREATE TABLE [{table_name}] ({', '.join(col_defs)})")
             tgt.commit()
 
-            # Вставляем строки
             if rows:
-                placeholders = ", ".join(["?" for _ in col_names])
+                placeholders  = ", ".join(["?" for _ in col_names])
                 col_names_sql = ", ".join([f"[{n}]" for n in col_names])
                 tgt_cur.executemany(
                     f"INSERT INTO [{table_name}] ({col_names_sql}) VALUES ({placeholders})",
                     rows
                 )
                 tgt.commit()
-
         finally:
             src.close()
             tgt.close()
 
-    # ── обработчик кнопки ─────────────────────────────────────────────────────
+    # ── Логика «Адрес в тексте» ──────────────────────────────────────────────
+
+    def _get_locality_from_mdb(self, mdb_path):
+        """
+        Читает из таблицы Locations поля City_Name/City_Type или
+        Locality_Name/Locality_Type.
+        Возвращает (name, type_genitive) или (None, None).
+        """
+        conn = self._get_conn(mdb_path)
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM [Locations]")
+            cols = [d[0] for d in cur.description]
+            row  = cur.fetchone()
+            if row is None:
+                return None, None
+
+            row_dict = dict(zip(cols, row))
+
+            # City_Name / City_Type
+            name     = row_dict.get("City_Name") or row_dict.get("city_name")
+            type_val = row_dict.get("City_Type") or row_dict.get("city_type")
+            # Fallback: Locality_Name / Locality_Type
+            if not name or not type_val:
+                name     = row_dict.get("Locality_Name") or row_dict.get("locality_name")
+                type_val = row_dict.get("Locality_Type") or row_dict.get("locality_type")
+
+            if not name or not type_val:
+                return None, None
+
+            type_gen = self.TYPE_GENITIVE.get(str(type_val).strip().lower(), str(type_val).strip())
+            return str(name).strip(), type_gen
+        finally:
+            conn.close()
+
+    def _update_title_table(self, mdb_path, name, type_genitive):
+        """
+        В таблице Титульный_картаплан колонки Объект_ЗУ заменяет
+        «в границах ... муниципального образования»
+        на «в границах {type_genitive} {name} муниципального образования».
+        Возвращает число обновлённых строк.
+        """
+        conn    = self._get_conn(mdb_path)
+        updated = 0
+        try:
+            cur  = conn.cursor()
+            cur.execute("SELECT * FROM [Титульный_картаплан]")
+            cols = [d[0] for d in cur.description]
+
+            if "Объект_ЗУ" not in cols:
+                return 0
+
+            pk_col  = cols[0]
+            rows    = cur.fetchall()
+            pattern = re.compile(
+                r"(в\s+границах\s+).+?(\s+муниципального\s+образования)",
+                re.IGNORECASE | re.DOTALL
+            )
+            repl = rf"\g<1>{type_genitive} {name}\g<2>"
+
+            for row in rows:
+                row_dict = dict(zip(cols, row))
+                old_val  = row_dict.get("Объект_ЗУ")
+                if old_val and isinstance(old_val, str):
+                    new_val = pattern.sub(repl, old_val)
+                    if new_val != old_val:
+                        cur.execute(
+                            f"UPDATE [Титульный_картаплан] SET [Объект_ЗУ]=? WHERE [{pk_col}]=?",
+                            (new_val, row_dict[pk_col])
+                        )
+                        updated += 1
+
+            conn.commit()
+        finally:
+            conn.close()
+        return updated
+
+    # ── Главный обработчик ───────────────────────────────────────────────────
 
     def _run(self):
         if not PYODBC_AVAILABLE:
             messagebox.showerror("Ошибка", "Установите pyodbc:\n\npip install pyodbc")
             return
 
-        source_root = self.source_root_var.get().strip()
-        target_root = self.target_root_var.get().strip()
-        table_name  = self.table_name_var.get().strip()
-
-        if not os.path.isdir(source_root) or not os.path.isdir(target_root):
-            messagebox.showerror("Ошибка", "Укажите корректные папки SOURCE и TARGET!")
-            return
-        if not table_name:
-            messagebox.showerror("Ошибка", "Введите имя таблицы!")
-            return
-
-        # Очищаем лог
-        self.log.configure(state="normal")
-        self.log.delete("1.0", "end")
-        self.log.configure(state="disabled")
-
-        source_map = self._collect_source(source_root)
-        if not source_map:
-            self._log("❌ SOURCE-файлы .mdb не найдены.")
-            return
-
-        self.progress_bar["maximum"] = len(source_map)
+        mode = self.mode_var.get()
+        self._log_clear()
         self.progress_bar["value"] = 0
 
-        for i, (folder_name, source_mdb) in enumerate(source_map.items(), 1):
-            target_list = self._find_target_mdb(target_root, folder_name)
+        # ── ВРИ / Своё: source папка → target папка по индексу папок ─────────
+        if mode in (self.MODE_VRI, self.MODE_CUSTOM):
+            source_root = self.vri_source_var.get().strip()
+            target_root = self.vri_target_var.get().strip()
+            if not os.path.isdir(source_root) or not os.path.isdir(target_root):
+                messagebox.showerror("Ошибка", "Укажите корректные папки SOURCE и TARGET!")
+                return
+
+            if mode == self.MODE_VRI:
+                table_name = "Utilizations_KP"
+            else:
+                table_name = self.custom_table_var.get().strip()
+                if not table_name:
+                    messagebox.showerror("Ошибка", "Введите имя таблицы!")
+                    return
+
+            source_map = self._collect_source_by_folder(source_root)
+            if not source_map:
+                self._log("❌ SOURCE-файлы .mdb не найдены.")
+                return
+
+            self.progress_bar["maximum"] = len(source_map)
+            for i, (folder_name, source_mdb) in enumerate(source_map.items(), 1):
+                target_list = self._find_target_by_folder(target_root, folder_name)
+                if not target_list:
+                    self._log(f"❌ Нет target для папки «{folder_name}»")
+                    self.progress_bar["value"] = i
+                    continue
+
+                self._log(f"\n🔄 {folder_name}")
+                self._log(f"   SOURCE: {source_mdb}")
+                for target_mdb in target_list:
+                    self._log(f"   → {target_mdb}")
+                    try:
+                        self._copy_table(source_mdb, target_mdb, table_name)
+                        self._log("     ✅ OK")
+                    except Exception as e:
+                        self._log(f"     ⚠️ ERROR: {e}")
+
+                self.progress_bar["value"] = i
+
+        # ── ФИАС: один source mdb → все mdb в target папке ───────────────────
+        elif mode == self.MODE_FIAS:
+            source_mdb  = self.fias_mdb_var.get().strip()
+            target_root = self.fias_target_var.get().strip()
+            if not os.path.isfile(source_mdb):
+                messagebox.showerror("Ошибка", "Укажите корректный файл source MDB!")
+                return
+            if not os.path.isdir(target_root):
+                messagebox.showerror("Ошибка", "Укажите корректную папку TARGET!")
+                return
+
+            target_list = self._collect_all_mdb(target_root)
+            # Исключаем source из target, если он там оказался
+            target_list = [t for t in target_list if os.path.abspath(t) != os.path.abspath(source_mdb)]
 
             if not target_list:
-                self._log(f"❌ Нет target для {folder_name}")
-                self.progress_bar["value"] = i
-                continue
+                self._log("❌ mdb-файлы в TARGET не найдены.")
+                return
 
-            self._log(f"\n🔄 {folder_name}")
-            self._log(f"   SOURCE: {source_mdb}")
-            self._log(f"   FOUND:  {len(target_list)} target(s)")
+            self._log(f"SOURCE: {source_mdb}")
+            self._log(f"Найдено target: {len(target_list)}\n")
+            self.progress_bar["maximum"] = len(target_list)
 
-            for target_mdb in target_list:
-                self._log(f"   → {target_mdb}")
+            for i, target_mdb in enumerate(target_list, 1):
+                self._log(f"→ {target_mdb}")
                 try:
-                    self._copy_table(source_mdb, target_mdb, table_name)
-                    self._log("     ✅ OK")
+                    self._copy_table(source_mdb, target_mdb, "Locations")
+                    self._log("   ✅ OK")
                 except Exception as e:
-                    self._log(f"     ⚠️ ERROR: {e}")
+                    self._log(f"   ⚠️ ERROR: {e}")
+                self.progress_bar["value"] = i
 
-            self.progress_bar["value"] = i
+        # ── Адрес в тексте: каждый mdb сам себя обновляет ────────────────────
+        elif mode == self.MODE_TEXT:
+            folder = self.text_folder_var.get().strip()
+            if not os.path.isdir(folder):
+                messagebox.showerror("Ошибка", "Укажите корректную папку с mdb!")
+                return
+
+            mdb_list = self._collect_all_mdb(folder)
+            if not mdb_list:
+                self._log("❌ mdb-файлы не найдены.")
+                return
+
+            self.progress_bar["maximum"] = len(mdb_list)
+            for i, mdb_path in enumerate(mdb_list, 1):
+                self._log(f"\n🔄 {os.path.basename(mdb_path)}")
+                self._log(f"   {mdb_path}")
+                try:
+                    name, type_gen = self._get_locality_from_mdb(mdb_path)
+                    if not name:
+                        self._log("   ⚠️ НП не найден в Locations — пропуск")
+                    else:
+                        self._log(f"   НП: {type_gen} {name}")
+                        n = self._update_title_table(mdb_path, name, type_gen)
+                        self._log(f"   ✅ Обновлено строк: {n}")
+                except Exception as e:
+                    self._log(f"   ⚠️ ERROR: {e}")
+                self.progress_bar["value"] = i
 
         self._log("\n✅ Готово.")
-        messagebox.showinfo("Готово", "Копирование таблиц завершено.")
+        messagebox.showinfo("Готово", "Операция завершена.")
         self.progress_bar["value"] = 0
 
 
