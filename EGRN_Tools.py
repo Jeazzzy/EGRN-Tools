@@ -1,4 +1,5 @@
 import os
+import re
 import csv
 import zipfile
 import shutil
@@ -7,43 +8,49 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from tkinterdnd2 import DND_FILES, TkinterDnD
 
+try:
+    import pyodbc
+
+    PYODBC_AVAILABLE = True
+except ImportError:
+    PYODBC_AVAILABLE = False
+
 
 # --- Основной класс приложения ---
 class Application(TkinterDnD.Tk):
     def __init__(self, *args, **kwargs):
         TkinterDnD.Tk.__init__(self, *args, **kwargs)
         self.title("EGRN Tools")
-        self.geometry("600x450")
+        self.geometry("1000x900")
 
-        # --- Контейнер для страниц ---
         container = tk.Frame(self)
         container.pack(side="bottom", fill="both", expand=True)
         container.grid_rowconfigure(0, weight=1)
         container.grid_columnconfigure(0, weight=1)
 
-        # --- Панель кнопок ---
         control_frame = tk.Frame(self, bg="#f0f0f0")
         control_frame.pack(side="top", fill="x")
 
-        # --- Словарь для страниц ---
         self.frames = {}
-        for F in (XmlExtractorPage, ZipProcessorPage, MifProjectionPage):
+        for F in (XmlExtractorPage, ZipProcessorPage, MifProjectionPage, MdbCopyPage):
             page_name = F.__name__
             frame = F(parent=container, controller=self)
             self.frames[page_name] = frame
             frame.grid(row=0, column=0, sticky="nsew")
 
-        # --- Кнопки переключения ---
         button1 = ttk.Button(control_frame, text="XML → CSV",
                              command=lambda: self.show_frame("XmlExtractorPage"))
         button2 = ttk.Button(control_frame, text="Распаковка ZIP",
                              command=lambda: self.show_frame("ZipProcessorPage"))
         button3 = ttk.Button(control_frame, text="Исправление MIF",
                              command=lambda: self.show_frame("MifProjectionPage"))
+        button4 = ttk.Button(control_frame, text="Работа с MDB",
+                             command=lambda: self.show_frame("MdbCopyPage"))
 
         button1.pack(side="left", padx=10, pady=5)
         button2.pack(side="left", padx=10, pady=5)
         button3.pack(side="left", padx=10, pady=5)
+        button4.pack(side="left", padx=10, pady=5)
 
         self.show_frame("XmlExtractorPage")
 
@@ -60,8 +67,7 @@ class XmlExtractorPage(tk.Frame):
         self.source_dir_var = tk.StringVar()
         self.stats_var = tk.StringVar()
 
-        tk.Label(self, text="Папка для обработки XML:", font=("Arial", 12)).pack(pady=(15, 5))
-
+        tk.Label(self, text="Папка для обработки XML:", font=("ISOCPEUR", 16)).pack(pady=(15, 5))
         frame_path = tk.Frame(self)
         frame_path.pack(fill="x", padx=20)
         self.entry = tk.Entry(frame_path, textvariable=self.source_dir_var, width=60)
@@ -69,16 +75,15 @@ class XmlExtractorPage(tk.Frame):
         self.entry.focus_set()
         tk.Button(frame_path, text="Выбрать", command=self.select_source_directory).pack(side=tk.LEFT)
 
-        tk.Button(self, text="Обработать в CSV", font=("Arial", 14, 'bold'), bg="#87CEEB", fg="white",
+        tk.Button(self, text="Обработать в CSV", font=("ISOCPEUR", 16, 'bold'), bg="#87CEEB", fg="white",
                   command=self.process_xml_directory).pack(pady=20)
 
         self.progress_bar = ttk.Progressbar(self, orient="horizontal", mode="determinate", length=500)
         self.progress_bar.pack(pady=10, padx=20)
 
-        stats_label = tk.Label(self, textvariable=self.stats_var, font=("Arial", 10), justify="left")
+        stats_label = tk.Label(self, textvariable=self.stats_var, font=("ISOCPEUR", 16), justify="left")
         stats_label.pack(pady=5, padx=20, anchor="w")
 
-        # Контекстное меню
         self.context_menu = tk.Menu(self, tearoff=0)
         self.context_menu.add_command(label="Вставить", command=lambda: self.entry.event_generate("<<Paste>>"))
         self.context_menu.add_command(label="Копировать", command=lambda: self.entry.event_generate("<<Copy>>"))
@@ -181,7 +186,7 @@ class ZipProcessorPage(tk.Frame):
         self.target_dir_var = tk.StringVar()
         self.stats_var = tk.StringVar()
 
-        tk.Label(self, text="Исходная папка с ZIP:", font=("Arial", 11), bg="#f5f5f5").pack(pady=(5, 0), padx=20,
+        tk.Label(self, text="Исходная папка с ZIP:", font=("ISOCPEUR", 16), bg="#f5f5f5").pack(pady=(5, 0), padx=20,
                                                                                             anchor="w")
         frame_source = tk.Frame(self, bg="#f5f5f5")
         frame_source.pack(fill="x", padx=20)
@@ -190,7 +195,7 @@ class ZipProcessorPage(tk.Frame):
         tk.Button(frame_source, text="Выбрать", command=lambda: self.select_directory(self.source_dir_var)).pack(
             side=tk.LEFT)
 
-        tk.Label(self, text="Целевая папка для результатов:", font=("Arial", 11), bg="#f5f5f5").pack(pady=(15, 0),
+        tk.Label(self, text="Целевая папка для результатов:", font=("ISOCPEUR", 16), bg="#f5f5f5").pack(pady=(15, 0),
                                                                                                      padx=20,
                                                                                                      anchor="w")
         frame_target = tk.Frame(self, bg="#f5f5f5")
@@ -201,8 +206,7 @@ class ZipProcessorPage(tk.Frame):
             side=tk.LEFT)
 
         tk.Button(self, text="Распаковать и переименовать",
-                  font=("Arial", 14, 'bold'),
-                  bg="#87CEEB", fg="white",
+                  font=("ISOCPEUR", 16, 'bold'), bg="#87CEEB", fg="white",
                   command=self.process_zip_files).pack(pady=25)
 
         self.progress_bar = ttk.Progressbar(self, orient="horizontal", mode="determinate", length=550)
@@ -210,19 +214,15 @@ class ZipProcessorPage(tk.Frame):
 
         self.zip_rename_label = tk.Label(
             self,
+            font=("ISOCPEUR", 16),
             text="Для быстрого переименовывания\nПеретащите ZIP/XML-файлы сюда",
-            bg="#E0FFFF",
-            width=60,
-            height=6,
-            relief="ridge"
+            bg="#E0FFFF", width=60, height=6, relief="ridge"
         )
         self.zip_rename_label.pack(pady=10)
-
         self.zip_rename_label.drop_target_register(DND_FILES)
         self.zip_rename_label.dnd_bind('<<Drop>>', self.drop_zip_rename)
 
-
-        stats_label = tk.Label(self, textvariable=self.stats_var, font=("Arial", 10), justify="left", bg="#f5f5f5")
+        stats_label = tk.Label(self, textvariable=self.stats_var, font=("ISOCPEUR", 16), justify="left", bg="#f5f5f5")
         stats_label.pack(pady=5, padx=20, anchor="w")
 
     def select_directory(self, var):
@@ -242,16 +242,13 @@ class ZipProcessorPage(tk.Frame):
     def get_cad_number_from_xml(self, xml_content):
         try:
             root = ET.fromstring(xml_content)
-
             cad_text = None
 
-            # Новый алгоритм для КПТ
             if root.tag == "extract_cadastral_plan_territory":
                 cad_element = root.find(".//cadastral_block/cadastral_number")
                 if cad_element is not None and cad_element.text:
                     cad_text = cad_element.text
 
-            # Старый алгоритм (fallback)
             if not cad_text:
                 common_data = root.find(".//common_data")
                 if common_data is not None:
@@ -261,9 +258,7 @@ class ZipProcessorPage(tk.Frame):
 
             if cad_text:
                 return cad_text.strip().replace(":", "_")
-
             return None
-
         except ET.ParseError:
             print("Ошибка: Не удалось распарсить XML.")
             return None
@@ -275,23 +270,20 @@ class ZipProcessorPage(tk.Frame):
         try:
             with zipfile.ZipFile(zip_path, 'r') as zf:
                 xml_info = next(
-                    (info for info in zf.infolist() if info.filename.lower().endswith('.xml')),
-                    None
+                    (info for info in zf.infolist() if info.filename.lower().endswith('.xml')), None
                 )
                 if not xml_info:
                     return f"XML не найден: {os.path.basename(zip_path)}"
-
                 with zf.open(xml_info) as xml_file:
                     xml_content = xml_file.read()
-                    cad_number = self.get_cad_number_from_xml(xml_content)
 
-                if not cad_number:
-                    return f"Кадастровый номер не найден: {os.path.basename(zip_path)}"
+            cad_number = self.get_cad_number_from_xml(xml_content)
+            if not cad_number:
+                return f"Кадастровый номер не найден: {os.path.basename(zip_path)}"
 
             folder = os.path.dirname(zip_path)
             base_name = cad_number
             new_path = os.path.join(folder, f"{base_name}.zip")
-
             i = 1
             while os.path.exists(new_path):
                 new_path = os.path.join(folder, f"{base_name}({i}).zip")
@@ -299,7 +291,6 @@ class ZipProcessorPage(tk.Frame):
 
             os.rename(zip_path, new_path)
             return f"Переименован: {os.path.basename(new_path)}"
-
         except Exception as e:
             return f"Ошибка {os.path.basename(zip_path)}: {e}"
 
@@ -315,7 +306,6 @@ class ZipProcessorPage(tk.Frame):
             folder = os.path.dirname(xml_path)
             base_name = cad_number
             new_path = os.path.join(folder, f"{base_name}.xml")
-
             i = 1
             while os.path.exists(new_path):
                 new_path = os.path.join(folder, f"{base_name}({i}).xml")
@@ -323,20 +313,16 @@ class ZipProcessorPage(tk.Frame):
 
             os.rename(xml_path, new_path)
             return f"XML переименован: {os.path.basename(new_path)}"
-
         except Exception as e:
             return f"Ошибка XML {os.path.basename(xml_path)}: {e}"
 
     def drop_zip_rename(self, event):
         files = self.master.tk.splitlist(event.data)
-
         for file in files:
-            file = file.strip("{}")  # важно для Windows путей с пробелами
-
+            file = file.strip("{}")
             if file.lower().endswith(".zip"):
                 result = self.rename_zip_by_cadastral(file)
                 print(result)
-
             elif file.lower().endswith(".xml"):
                 result = self.rename_xml_by_cadastral(file)
                 print(result)
@@ -355,9 +341,9 @@ class ZipProcessorPage(tk.Frame):
             return
 
         zip_out_dir, xml_out_dir, pdf_out_dir = self.create_output_dirs(target_dir)
-
         total_files = len(zip_files)
         success_count = 0
+
         self.progress_bar["maximum"] = total_files
         self.progress_bar["value"] = 0
         self.stats_var.set("Начало обработки...")
@@ -367,13 +353,14 @@ class ZipProcessorPage(tk.Frame):
         for index, filename in enumerate(zip_files, start=1):
             full_zip_path = os.path.join(source_dir, filename)
             cad_number = None
+
             try:
                 with zipfile.ZipFile(full_zip_path, 'r') as zf:
                     xml_info = next((info for info in zf.infolist() if info.filename.lower().endswith('.xml')), None)
                     if xml_info:
                         with zf.open(xml_info) as xml_file:
                             xml_content = xml_file.read()
-                            cad_number = self.get_cad_number_from_xml(xml_content)
+                        cad_number = self.get_cad_number_from_xml(xml_content)
 
                     if cad_number:
                         new_base_name = cad_number
@@ -387,9 +374,11 @@ class ZipProcessorPage(tk.Frame):
                                 shutil.move(src_path, os.path.join(xml_out_dir, f"{new_base_name}.xml"))
                             elif extracted_file.lower().endswith(".pdf"):
                                 shutil.move(src_path, os.path.join(pdf_out_dir, f"{new_base_name}.pdf"))
+
                         success_count += 1
                     else:
                         print(f"Пропуск {filename}: Кадастровый номер не найден.")
+
             except Exception as e:
                 print(f"Ошибка при обработке {filename}: {e}")
             finally:
@@ -417,33 +406,24 @@ class MifProjectionPage(tk.Frame):
         self.mif_files = []
 
         self.label = tk.Label(
-            self,
-            text="Перетащите MIF файлы сюда",
-            font=("Arial", 12),
-            bg="#E0FFFF",
-            width=50,
-            height=10,
-            relief="ridge"
+            self, text="Перетащите MIF файлы сюда",
+            font=("ISOCPEUR", 16), bg="#E0FFFF", width=50, height=10, relief="ridge"
         )
         self.label.pack(pady=20)
-
         self.label.drop_target_register(DND_FILES)
         self.label.dnd_bind('<<Drop>>', self.drop_files)
 
         self.count_var = tk.StringVar(value="Загружено файлов: 0")
-        self.count_label = tk.Label(self, textvariable=self.count_var, font=("Arial", 11), bg="#f5f5f5")
+        self.count_label = tk.Label(self, textvariable=self.count_var, font=("ISOCPEUR", 16), bg="#f5f5f5")
         self.count_label.pack(pady=5)
 
         btn_frame = tk.Frame(self, bg="#f5f5f5")
         btn_frame.pack(pady=10)
-
         tk.Button(btn_frame, text="Очистить файлы",
-                  font=("Arial", 14, 'bold'),
-                  bg="#C0C0C0", fg="white",
+                  font=("ISOCPEUR", 16, 'bold'), bg="#C0C0C0", fg="white",
                   command=self.clear_files).pack(side=tk.LEFT, padx=10)
         tk.Button(btn_frame, text="Исправить пределы",
-                  font=("Arial", 14, 'bold'),
-                  bg="#87CEEB", fg="white",
+                  font=("ISOCPEUR", 16, 'bold'), bg="#87CEEB", fg="white",
                   command=self.change_projection).pack(side=tk.LEFT, padx=10)
 
     def drop_files(self, event):
@@ -466,7 +446,6 @@ class MifProjectionPage(tk.Frame):
             try:
                 with open(file_path, "r", encoding="utf-8") as f:
                     lines = f.readlines()
-
                 with open(file_path, "w", encoding="utf-8") as f:
                     for line in lines:
                         if line.strip().startswith("CoordSys"):
@@ -477,6 +456,698 @@ class MifProjectionPage(tk.Frame):
                 print(f"Ошибка при обработке {file_path}: {e}")
 
         messagebox.showinfo("Готово", f"Проекция изменена для {len(self.mif_files)} файлов.")
+
+
+# --- 4. Копирование/обновление MDB ---
+class MdbCopyPage(tk.Frame):
+    # Родительный падеж для всех типов НП (ID-коды и полные названия)
+    TYPE_GENITIVE = {
+        # ID-коды
+        "аал": "аала",
+        "автодорога": "автодороги",
+        "арбан": "арбана",
+        "аул": "аула",
+        "волость": "волости",
+        "высел": "выселок",
+        "г": "города",
+        "городок": "городка",
+        "д": "деревни",
+        "дп": "дачного поселка",
+        "ж/д_будка": "железнодорожной будки",
+        "ж/д_казарм": "железнодорожной казармы",
+        "ж/д_оп": "ж/д остановочного (обгонного) пункта",
+        "ж/д_платф": "железнодорожной платформы",
+        "ж/д_пост": "железнодорожного поста",
+        "ж/д_рзд": "железнодорожного разъезда",
+        "ж/д_ст": "железнодорожной станции",
+        "жилзона": "жилой зоны",
+        "жилрайон": "жилого района",
+        "заимка": "заимки",
+        "казарма": "казармы",
+        "кв-л": "квартала",
+        "кордон": "кордона",
+        "кп": "курортного поселка",
+        "лпх": "леспромхоза",
+        "м": "местечка",
+        "массив": "массива",
+        "мкр": "микрорайона",
+        "нп": "населенного пункта",
+        "остров": "острова",
+        "п": "поселка",
+        "п/о": "почтового отделения",
+        "п/р": "планировочного района",
+        "п/ст": "поселка и(при) станции(и)",
+        "пгт": "поселка городского типа",
+        "погост": "погоста",
+        "починок": "починка",
+        "промзона": "промышленной зоны",
+        "рзд": "разъезда",
+        "рп": "рабочего поселка",
+        "с": "села",
+        "сл": "слободы",
+        "снт": "садового некоммерческого товарищества",
+        "ст": "станции",
+        "ст-ца": "станицы",
+        "тер": "территории",
+        "у": "улуса",
+        "х": "хутора",
+        # Полные названия (на случай если в БД хранятся они)
+        "город": "города",
+        "деревня": "деревни",
+        "дачный поселок": "дачного поселка",
+        "выселки(ок)": "выселок",
+        "железнодорожная будка": "железнодорожной будки",
+        "железнодорожная казарма": "железнодорожной казармы",
+        "ж/д остановочный (обгонный) пункт": "ж/д остановочного (обгонного) пункта",
+        "железнодорожная платформа": "железнодорожной платформы",
+        "железнодорожный пост": "железнодорожного поста",
+        "железнодорожный разъезд": "железнодорожного разъезда",
+        "железнодорожная станция": "железнодорожной станции",
+        "жилая зона": "жилой зоны",
+        "жилой район": "жилого района",
+        "квартал": "квартала",
+        "курортный поселок": "курортного поселка",
+        "леспромхоз": "леспромхоза",
+        "местечко": "местечка",
+        "микрорайон": "микрорайона",
+        "населенный пункт": "населенного пункта",
+        "поселок": "поселка",
+        "почтовое отделение": "почтового отделения",
+        "планировочный район": "планировочного района",
+        "поселок и(при) станция(и)": "поселка и(при) станции(и)",
+        "поселок городского типа": "поселка городского типа",
+        "промышленная зона": "промышленной зоны",
+        "разъезд": "разъезда",
+        "рабочий поселок": "рабочего поселка",
+        "село": "села",
+        "слобода": "слободы",
+        "садовое некоммерческое товарищество": "садового некоммерческого товарищества",
+        "станция": "станции",
+        "станица": "станицы",
+        "территория": "территории",
+        "улус": "улуса",
+        "хутор": "хутора",
+    }
+
+    MODE_REPLACE_MDB = "замена_mdb"
+    MODE_FIAS = "фиас"
+    MODE_TEXT = "текст"
+    MODE_REPLACE_TABLE = "замена_таблицы"
+
+    def __init__(self, parent, controller):
+        tk.Frame.__init__(self, parent, bg="#f5f5f5")
+        self.controller = controller
+
+        # Переменные для всех четырёх режимов
+        self.mode_var = tk.StringVar(value=self.MODE_REPLACE_MDB)
+
+        # Замена MDB: source папка + target папка
+        self.replace_mdb_source_var = tk.StringVar()
+        self.replace_mdb_target_var = tk.StringVar()
+
+
+        # ФИАС: один source mdb + target папка
+        self.fias_mdb_var = tk.StringVar()
+        self.fias_target_var = tk.StringVar()
+
+        # Адрес в тексте: одна папка с mdb + галочка "Вне НП"
+        self.text_folder_var = tk.StringVar()
+        self.text_outside_var = tk.BooleanVar(value=False)
+
+        # Замена одной таблицы: source MDB + target папка + таблица
+        self.replace_table_mdb_var = tk.StringVar()
+        self.replace_table_target_var = tk.StringVar()
+        self.replace_table_name_var = tk.StringVar()
+
+        # ── Предупреждение pyodbc ────────────────────────────────────────────
+        if not PYODBC_AVAILABLE:
+            tk.Label(
+                self,
+                text="⚠️ Модуль pyodbc не установлен.\nВыполните: pip install pyodbc",
+                font=("ISOCPEUR", 16), bg="#fff3cd", fg="#856404",
+                relief="ridge", padx=10, pady=6
+            ).pack(fill="x", padx=20, pady=(10, 0))
+
+        # ── Выбор режима (радиокнопки) ───────────────────────────────────────
+        mode_frame = tk.LabelFrame(
+            self, text="Режим работы", font=("ISOCPEUR", 16, "bold"),
+            bg="#f5f5f5", padx=10, pady=4
+        )
+        mode_frame.pack(fill="x", padx=20, pady=(10, 4))
+
+        modes = [
+            (self.MODE_REPLACE_MDB, "Замена MDB"),
+            (self.MODE_FIAS, "Адрес по ФИАС"),
+            (self.MODE_TEXT, "Адрес в тексте"),
+            (self.MODE_REPLACE_TABLE, "Замена одной таблицы"),
+        ]
+        for val, label in modes:
+            tk.Radiobutton(
+                mode_frame, text=label, variable=self.mode_var, value=val,
+                bg="#f5f5f5", font=("ISOCPEUR", 16),
+                command=self._on_mode_change
+            ).pack(side=tk.LEFT, padx=12, pady=2)
+
+        # ══════════════════════════════════════════════════════════════════════
+        # Панель "Замена MDB": source папка + target папка
+        # ══════════════════════════════════════════════════════════════════════
+        self.panel_replace_mdb = tk.Frame(self, bg="#f5f5f5")
+
+        tk.Label(self.panel_replace_mdb,
+                 text="Source папка (папки с MDB-источниками по индексу):",
+                 font=("ISOCPEUR", 16), bg="#f5f5f5").pack(pady=(6, 0), padx=4, anchor="w")
+        fr = tk.Frame(self.panel_replace_mdb, bg="#f5f5f5");
+        fr.pack(fill="x", padx=4)
+        tk.Entry(fr, textvariable=self.replace_mdb_source_var, width=58).pack(side=tk.LEFT, fill="x", expand=True,
+                                                                              padx=(0, 5))
+        tk.Button(fr, text="Выбрать", command=lambda: self._pick_dir(self.replace_mdb_source_var)).pack(side=tk.LEFT)
+
+        tk.Label(self.panel_replace_mdb,
+                 text="Target папка (МО или НП):",
+                 font=("ISOCPEUR", 16), bg="#f5f5f5").pack(pady=(8, 0), padx=4, anchor="w")
+        fr2 = tk.Frame(self.panel_replace_mdb, bg="#f5f5f5");
+        fr2.pack(fill="x", padx=4)
+        tk.Entry(fr2, textvariable=self.replace_mdb_target_var, width=58).pack(side=tk.LEFT, fill="x", expand=True,
+                                                                               padx=(0, 5))
+        tk.Button(fr2, text="Выбрать", command=lambda: self._pick_dir(self.replace_mdb_target_var)).pack(side=tk.LEFT)
+
+        # ══════════════════════════════════════════════════════════════════════
+        # Панель "Замена одной таблицы": source MDB + target папка + таблица
+        # ══════════════════════════════════════════════════════════════════════
+        self.panel_replace_table = tk.Frame(self, bg="#f5f5f5")
+
+        tk.Label(self.panel_replace_table,
+                 text="Source MDB (файл-источник):",
+                 font=("ISOCPEUR", 16), bg="#f5f5f5").pack(pady=(6, 0), padx=4, anchor="w")
+        fr3 = tk.Frame(self.panel_replace_table, bg="#f5f5f5");
+        fr3.pack(fill="x", padx=4)
+        tk.Entry(fr3, textvariable=self.replace_table_mdb_var, width=58).pack(side=tk.LEFT, fill="x", expand=True,
+                                                                              padx=(0, 5))
+        tk.Button(fr3, text="Выбрать", command=self._pick_replace_table_mdb).pack(side=tk.LEFT)
+
+        tk.Label(self.panel_replace_table,
+                 text="Target папка (куда копировать таблицу):",
+                 font=("ISOCPEUR", 16), bg="#f5f5f5").pack(pady=(8, 0), padx=4, anchor="w")
+        fr4 = tk.Frame(self.panel_replace_table, bg="#f5f5f5");
+        fr4.pack(fill="x", padx=4)
+        tk.Entry(fr4, textvariable=self.replace_table_target_var, width=58).pack(side=tk.LEFT, fill="x", expand=True,
+                                                                                 padx=(0, 5))
+        tk.Button(fr4, text="Выбрать", command=lambda: self._pick_dir(self.replace_table_target_var)).pack(side=tk.LEFT)
+
+        # Выпадающий список таблиц + поле ввода своего имени
+        tk.Label(self.panel_replace_table, text="Имя таблицы:",
+                 font=("ISOCPEUR", 16), bg="#f5f5f5").pack(anchor="w", pady=(8, 0), padx=4)
+
+        table_frame = tk.Frame(self.panel_replace_table, bg="#f5f5f5")
+        table_frame.pack(fill="x", padx=4)
+
+        self.table_combobox = ttk.Combobox(table_frame, textvariable=self.replace_table_name_var,
+                                           width=40, state="normal")
+        self.table_combobox.pack(side=tk.LEFT, padx=(0, 5))
+
+        tk.Button(table_frame, text="Обновить список",
+                  command=self._load_tables_list).pack(side=tk.LEFT)
+
+        # ══════════════════════════════════════════════════════════════════════
+        # Панель ФИАС: один mdb-файл + target папка
+        # ══════════════════════════════════════════════════════════════════════
+        self.panel_fias = tk.Frame(self, bg="#f5f5f5")
+
+        tk.Label(self.panel_fias,
+                 text="Source MDB (файл с обновлённой таблицей Locations):",
+                 font=("ISOCPEUR", 16), bg="#f5f5f5").pack(pady=(6, 0), padx=4, anchor="w")
+        fr5 = tk.Frame(self.panel_fias, bg="#f5f5f5");
+        fr5.pack(fill="x", padx=4)
+        tk.Entry(fr5, textvariable=self.fias_mdb_var, width=58).pack(side=tk.LEFT, fill="x", expand=True, padx=(0, 5))
+        tk.Button(fr5, text="Выбрать", command=self._pick_fias_mdb).pack(side=tk.LEFT)
+
+        tk.Label(self.panel_fias,
+                 text="Target папка (все mdb внутри получат обновлённую Locations):",
+                 font=("ISOCPEUR", 16), bg="#f5f5f5").pack(pady=(8, 0), padx=4, anchor="w")
+        fr6 = tk.Frame(self.panel_fias, bg="#f5f5f5");
+        fr6.pack(fill="x", padx=4)
+        tk.Entry(fr6, textvariable=self.fias_target_var, width=58).pack(side=tk.LEFT, fill="x", expand=True,
+                                                                        padx=(0, 5))
+        tk.Button(fr6, text="Выбрать", command=lambda: self._pick_dir(self.fias_target_var)).pack(side=tk.LEFT)
+
+        # ══════════════════════════════════════════════════════════════════════
+        # Панель «Адрес в тексте»: папка с mdb + галочка "Вне НП"
+        # ══════════════════════════════════════════════════════════════════════
+        self.panel_text = tk.Frame(self, bg="#f5f5f5")
+
+        tk.Label(self.panel_text,
+                 text="Папка с mdb-файлами для обновления:",
+                 font=("ISOCPEUR", 16), bg="#f5f5f5").pack(pady=(6, 0), padx=4, anchor="w")
+        tk.Label(self.panel_text,
+                 text="Каждый mdb читает свою таблицу Locations и обновляет\n"
+                      "колонку Объект_ЗУ в таблице Титульный_картаплан.",
+                 font=("ISOCPEUR", 16), bg="#f5f5f5", fg="#555").pack(padx=4, anchor="w")
+        fr7 = tk.Frame(self.panel_text, bg="#f5f5f5");
+        fr7.pack(fill="x", padx=4)
+        tk.Entry(fr7, textvariable=self.text_folder_var, width=58).pack(side=tk.LEFT, fill="x", expand=True,
+                                                                        padx=(0, 5))
+        tk.Button(fr7, text="Выбрать", command=lambda: self._pick_dir(self.text_folder_var)).pack(side=tk.LEFT)
+
+        # Галочка "Вне НП"
+        tk.Checkbutton(self.panel_text, text="Вне НП (упрощенный текст без названия НП)",
+                       variable=self.text_outside_var, bg="#f5f5f5",
+                       font=("ISOCPEUR", 16)).pack(pady=(8, 0), padx=4, anchor="w")
+
+        # ── Кнопка запуска ───────────────────────────────────────────────────
+        self.run_btn = tk.Button(
+            self, text="▶ Запустить",
+            font=("ISOCPEUR", 16, "bold"), bg="#87CEEB", fg="white",
+            command=self._run
+        )
+        self.run_btn.pack(pady=10)
+
+        self.progress_bar = ttk.Progressbar(self, orient="horizontal", mode="determinate", length=550)
+        self.progress_bar.pack(padx=20)
+
+        self.log = tk.Text(self, height=10, font=("ISOCPEUR", 16),
+                           state="disabled", bg="#1e1e1e", fg="#d4d4d4")
+        self.log.pack(fill="both", expand=True, padx=20, pady=8)
+
+        # Показать начальную панель
+        self._on_mode_change()
+
+    # ── UI-хелперы ───────────────────────────────────────────────────────────
+
+    def _on_mode_change(self):
+        """Показывает нужную панель в зависимости от выбранного режима."""
+        for panel in (self.panel_replace_mdb, self.panel_replace_table,
+                      self.panel_fias, self.panel_text):
+            panel.pack_forget()
+
+        mode = self.mode_var.get()
+        if mode == self.MODE_REPLACE_MDB:
+            self.panel_replace_mdb.pack(fill="x", padx=16, before=self.run_btn)
+        elif mode == self.MODE_REPLACE_TABLE:
+            self.panel_replace_table.pack(fill="x", padx=16, before=self.run_btn)
+        elif mode == self.MODE_FIAS:
+            self.panel_fias.pack(fill="x", padx=16, before=self.run_btn)
+        elif mode == self.MODE_TEXT:
+            self.panel_text.pack(fill="x", padx=16, before=self.run_btn)
+
+    def _pick_dir(self, var):
+        d = filedialog.askdirectory()
+        if d:
+            var.set(d)
+
+    def _pick_fias_mdb(self):
+        f = filedialog.askopenfilename(filetypes=[("MDB files", "*.mdb")])
+        if f:
+            self.fias_mdb_var.set(f)
+
+    def _pick_replace_table_mdb(self):
+        f = filedialog.askopenfilename(filetypes=[("MDB files", "*.mdb")])
+        if f:
+            self.replace_table_mdb_var.set(f)
+            # Автоматически загружаем список таблиц
+            self._load_tables_list()
+
+    def _load_tables_list(self):
+        """Загружает список таблиц из выбранного MDB файла"""
+        mdb_path = self.replace_table_mdb_var.get().strip()
+        if not mdb_path or not os.path.isfile(mdb_path):
+            messagebox.showwarning("Внимание", "Сначала выберите MDB файл!")
+            return
+
+        if not PYODBC_AVAILABLE:
+            messagebox.showerror("Ошибка", "pyodbc не установлен!")
+            return
+
+        try:
+            conn = self._get_conn(mdb_path)
+            cursor = conn.cursor()
+            tables = [row.table_name for row in cursor.tables(tableType='TABLE')]
+            conn.close()
+
+            self.table_combobox['values'] = tables
+            if tables:
+                self.replace_table_name_var.set(tables[0])
+            self._log(f"✅ Загружено таблиц: {len(tables)}")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось загрузить список таблиц:\n{e}")
+
+    def _log(self, text):
+        self.log.configure(state="normal")
+        self.log.insert("end", text + "\n")
+        self.log.see("end")
+        self.log.configure(state="disabled")
+        self.update_idletasks()
+
+    def _log_clear(self):
+        self.log.configure(state="normal")
+        self.log.delete("1.0", "end")
+        self.log.configure(state="disabled")
+
+    # ── Подключение MDB ──────────────────────────────────────────────────────
+
+    def _get_conn(self, mdb_path):
+        conn_str = (
+            r"DRIVER={Microsoft Access Driver (*.mdb, *.accdb)};"
+            f"DBQ={mdb_path};"
+        )
+        return pyodbc.connect(conn_str, autocommit=False)
+
+    # ── Сбор файлов ──────────────────────────────────────────────────────────
+
+    def _collect_source_by_index(self, root):
+        """
+        Замена MDB: {индекс_папки: путь_к_mdb}
+        Ищет папки с именами-индексами, внутри каждой берет первый найденный mdb
+        """
+        result = {}
+        for dirpath, _, files in os.walk(root):
+            folder_name = os.path.basename(dirpath)
+            # Проверяем, что это папка верхнего уровня (индекс)
+            if dirpath != root and os.path.dirname(dirpath) == root:
+                for f in files:
+                    if f.lower().endswith(".mdb"):
+                        result[folder_name] = os.path.join(dirpath, f)
+                        break  # Берем только первый MDB из папки
+        return result
+
+    def _find_target_mdb_by_index(self, root, index_name):
+        """
+        Замена MDB: ищет все MDB в структуре МО/НП/индекс/рн/mdb
+        где в пути есть папка с именем = index_name
+        """
+        matches = []
+        for dirpath, _, files in os.walk(root):
+            # Проверяем, есть ли в пути папка с нужным индексом
+            path_parts = dirpath.split(os.sep)
+            if index_name in path_parts:
+                for f in files:
+                    if f.lower().endswith(".mdb"):
+                        matches.append(os.path.join(dirpath, f))
+        return matches
+
+    def _collect_all_mdb(self, root):
+        """Все mdb рекурсивно."""
+        result = []
+        for dirpath, _, files in os.walk(root):
+            for f in files:
+                if f.lower().endswith(".mdb"):
+                    result.append(os.path.join(dirpath, f))
+        return result
+
+    # ── Копирование таблицы ──────────────────────────────────────────────────
+
+    def _copy_table(self, source_mdb, target_mdb, table_name):
+        """
+        Заменяет содержимое таблицы в target данными из source.
+        Структура таблицы в target не трогается — только DELETE + INSERT.
+        """
+        src = self._get_conn(source_mdb)
+        tgt = self._get_conn(target_mdb)
+        try:
+            src_cur = src.cursor()
+            tgt_cur = tgt.cursor()
+
+            # Читаем все данные из источника
+            src_cur.execute(f"SELECT * FROM [{table_name}]")
+            rows = src_cur.fetchall()
+            col_names = [d[0] for d in src_cur.description]
+
+            # Очищаем таблицу в target
+            tgt_cur.execute(f"DELETE FROM [{table_name}]")
+            tgt.commit()
+
+            # Вставляем строки из источника
+            if rows:
+                placeholders = ", ".join(["?" for _ in col_names])
+                col_names_sql = ", ".join([f"[{n}]" for n in col_names])
+                tgt_cur.executemany(
+                    f"INSERT INTO [{table_name}] ({col_names_sql}) VALUES ({placeholders})",
+                    rows
+                )
+                tgt.commit()
+        finally:
+            src.close()
+            tgt.close()
+
+    def _replace_mdb_file(self, source_mdb, target_mdb):
+        """
+        Полная замена MDB файла: копирует source_mdb поверх target_mdb
+        """
+        try:
+            # Создаем резервную копию (опционально)
+            backup_path = target_mdb + ".backup"
+            if os.path.exists(backup_path):
+                os.remove(backup_path)
+            shutil.copy2(target_mdb, backup_path)
+
+            # Заменяем файл
+            shutil.copy2(source_mdb, target_mdb)
+            return True
+        except Exception as e:
+            self._log(f"     ⚠️ Ошибка замены: {e}")
+            return False
+
+    # ── Логика «Адрес в тексте» ──────────────────────────────────────────────
+
+    def _get_locality_from_mdb(self, mdb_path):
+        """
+        Читает из таблицы Locations поля City_Name/City_Type или
+        Locality_Name/Locality_Type.
+        Возвращает (name, type_genitive) или (None, None).
+        """
+        conn = self._get_conn(mdb_path)
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM [Locations]")
+            cols = [d[0] for d in cur.description]
+            row = cur.fetchone()
+            if row is None:
+                return None, None
+
+            row_dict = dict(zip(cols, row))
+
+            # City_Name / City_Type
+            name = row_dict.get("City_Name") or row_dict.get("city_name")
+            type_val = row_dict.get("City_Type") or row_dict.get("city_type")
+            # Fallback: Locality_Name / Locality_Type
+            if not name or not type_val:
+                name = row_dict.get("Locality_Name") or row_dict.get("locality_name")
+                type_val = row_dict.get("Locality_Type") or row_dict.get("locality_type")
+
+            if not name or not type_val:
+                return None, None
+
+            type_gen = self.TYPE_GENITIVE.get(str(type_val).strip().lower(), str(type_val).strip())
+            return str(name).strip(), type_gen
+        finally:
+            conn.close()
+
+    def _update_title_table(self, mdb_path, name, type_genitive, outside_np=False):
+        """
+        В таблице Титульный_картаплан колонки Объект_ЗУ заменяет
+        «в границах ... муниципального образования»
+        на соответствующий текст.
+
+        outside_np: если True, пишет просто "в границах муниципального образования"
+        иначе: "в границах {type_genitive} {name} муниципального образования"
+
+        Возвращает число обновлённых строк.
+        """
+        conn = self._get_conn(mdb_path)
+        updated = 0
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM [Титульный_картаплан]")
+            cols = [d[0] for d in cur.description]
+
+            if "Объект_ЗУ" not in cols:
+                return 0
+
+            pk_col = cols[0]
+            rows = cur.fetchall()
+            pattern = re.compile(
+                r"в\s+границах\s+.*?муниципального(?:\s+образования)?",
+                re.IGNORECASE | re.DOTALL
+            )
+
+            if outside_np:
+                repl = "в границах муниципального образования"
+            else:
+                repl = f"в границах {type_genitive} {name} муниципального образования"
+
+            for row in rows:
+                row_dict = dict(zip(cols, row))
+                old_val = row_dict.get("Объект_ЗУ")
+                if old_val and isinstance(old_val, str):
+                    new_val = pattern.sub(repl, old_val)
+                    if new_val != old_val:
+                        cur.execute(
+                            f"UPDATE [Титульный_картаплан] SET [Объект_ЗУ]=? WHERE [{pk_col}]=?",
+                            (new_val, row_dict[pk_col])
+                        )
+                        updated += 1
+
+            conn.commit()
+        finally:
+            conn.close()
+        return updated
+
+    # ── Главный обработчик ───────────────────────────────────────────────────
+
+    def _run(self):
+        if not PYODBC_AVAILABLE:
+            messagebox.showerror("Ошибка", "Установите pyodbc:\n\npip install pyodbc")
+            return
+
+        mode = self.mode_var.get()
+        self._log_clear()
+        self.progress_bar["value"] = 0
+
+        # ── Замена MDB: полная замена файлов по индексу ──────────────────────
+        if mode == self.MODE_REPLACE_MDB:
+            source_root = self.replace_mdb_source_var.get().strip()
+            target_root = self.replace_mdb_target_var.get().strip()
+            if not os.path.isdir(source_root) or not os.path.isdir(target_root):
+                messagebox.showerror("Ошибка", "Укажите корректные папки SOURCE и TARGET!")
+                return
+
+            source_map = self._collect_source_by_index(source_root)
+            if not source_map:
+                self._log("❌ SOURCE MDB-файлы не найдены по индексам.")
+                return
+
+            self.progress_bar["maximum"] = len(source_map)
+            total_replaced = 0
+
+            for i, (index_name, source_mdb) in enumerate(source_map.items(), 1):
+                target_list = self._find_target_mdb_by_index(target_root, index_name)
+                if not target_list:
+                    self._log(f"❌ Нет target MDB для индекса «{index_name}»")
+                    self.progress_bar["value"] = i
+                    continue
+
+                self._log(f"\n🔄 Индекс: {index_name}")
+                self._log(f"   SOURCE: {source_mdb}")
+                for target_mdb in target_list:
+                    self._log(f"   → {target_mdb}")
+                    if self._replace_mdb_file(source_mdb, target_mdb):
+                        self._log("     ✅ Файл заменен")
+                        total_replaced += 1
+                    else:
+                        self._log("     ⚠️ Ошибка замены")
+
+                self.progress_bar["value"] = i
+
+            self._log(f"\n✅ Всего заменено файлов: {total_replaced}")
+
+        # ── Замена одной таблицы: source MDB → все MDB в target папке ────────
+        elif mode == self.MODE_REPLACE_TABLE:
+            source_mdb = self.replace_table_mdb_var.get().strip()
+            target_root = self.replace_table_target_var.get().strip()
+            table_name = self.replace_table_name_var.get().strip()
+
+            if not os.path.isfile(source_mdb):
+                messagebox.showerror("Ошибка", "Укажите корректный файл source MDB!")
+                return
+            if not os.path.isdir(target_root):
+                messagebox.showerror("Ошибка", "Укажите корректную папку TARGET!")
+                return
+            if not table_name:
+                messagebox.showerror("Ошибка", "Укажите имя таблицы!")
+                return
+
+            target_list = self._collect_all_mdb(target_root)
+            # Исключаем source из target
+            target_list = [t for t in target_list if os.path.abspath(t) != os.path.abspath(source_mdb)]
+
+            if not target_list:
+                self._log("❌ MDB-файлы в TARGET не найдены.")
+                return
+
+            self._log(f"SOURCE: {source_mdb}")
+            self._log(f"Таблица: {table_name}")
+            self._log(f"Найдено target: {len(target_list)}\n")
+            self.progress_bar["maximum"] = len(target_list)
+
+            for i, target_mdb in enumerate(target_list, 1):
+                self._log(f"→ {target_mdb}")
+                try:
+                    self._copy_table(source_mdb, target_mdb, table_name)
+                    self._log("   ✅ OK")
+                except Exception as e:
+                    self._log(f"   ⚠️ ERROR: {e}")
+                self.progress_bar["value"] = i
+
+        # ── ФИАС: один source mdb → все mdb в target папке ───────────────────
+        elif mode == self.MODE_FIAS:
+            source_mdb = self.fias_mdb_var.get().strip()
+            target_root = self.fias_target_var.get().strip()
+            if not os.path.isfile(source_mdb):
+                messagebox.showerror("Ошибка", "Укажите корректный файл source MDB!")
+                return
+            if not os.path.isdir(target_root):
+                messagebox.showerror("Ошибка", "Укажите корректную папку TARGET!")
+                return
+
+            target_list = self._collect_all_mdb(target_root)
+            target_list = [t for t in target_list if os.path.abspath(t) != os.path.abspath(source_mdb)]
+
+            if not target_list:
+                self._log("❌ MDB-файлы в TARGET не найдены.")
+                return
+
+            self._log(f"SOURCE: {source_mdb}")
+            self._log(f"Найдено target: {len(target_list)}\n")
+            self.progress_bar["maximum"] = len(target_list)
+
+            for i, target_mdb in enumerate(target_list, 1):
+                self._log(f"→ {target_mdb}")
+                try:
+                    self._copy_table(source_mdb, target_mdb, "Locations")
+                    self._log("   ✅ OK")
+                except Exception as e:
+                    self._log(f"   ⚠️ ERROR: {e}")
+                self.progress_bar["value"] = i
+
+        # ── Адрес в тексте: каждый mdb сам себя обновляет ────────────────────
+        elif mode == self.MODE_TEXT:
+            folder = self.text_folder_var.get().strip()
+            outside_np = self.text_outside_var.get()
+
+            if not os.path.isdir(folder):
+                messagebox.showerror("Ошибка", "Укажите корректную папку с mdb!")
+                return
+
+            mdb_list = self._collect_all_mdb(folder)
+            if not mdb_list:
+                self._log("❌ MDB-файлы не найдены.")
+                return
+
+            self.progress_bar["maximum"] = len(mdb_list)
+            for i, mdb_path in enumerate(mdb_list, 1):
+                self._log(f"\n🔄 {os.path.basename(mdb_path)}")
+                self._log(f"   {mdb_path}")
+                try:
+                    if outside_np:
+                        # Режим "Вне НП" - используем упрощенный текст
+                        self._log("   Режим: Вне НП")
+                        n = self._update_title_table(mdb_path, None, None, outside_np=True)
+                        self._log(f"   ✅ Обновлено строк: {n}")
+                    else:
+                        # Обычный режим - читаем НП из Locations
+                        name, type_gen = self._get_locality_from_mdb(mdb_path)
+                        if not name:
+                            self._log("   ⚠️ НП не найден в Locations — пропуск")
+                        else:
+                            self._log(f"   НП: {type_gen} {name}")
+                            n = self._update_title_table(mdb_path, name, type_gen, outside_np=False)
+                            self._log(f"   ✅ Обновлено строк: {n}")
+                except Exception as e:
+                    self._log(f"   ⚠️ ERROR: {e}")
+                self.progress_bar["value"] = i
+
+        self._log("\n✅ Готово.")
+        messagebox.showinfo("Готово", "Операция завершена.")
+        self.progress_bar["value"] = 0
 
 
 # --- Запуск приложения ---
