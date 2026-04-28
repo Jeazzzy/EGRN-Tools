@@ -187,7 +187,7 @@ class ZipProcessorPage(tk.Frame):
         self.stats_var = tk.StringVar()
 
         tk.Label(self, text="Исходная папка с ZIP:", font=("ISOCPEUR", 16), bg="#f5f5f5").pack(pady=(5, 0), padx=20,
-                                                                                            anchor="w")
+                                                                                               anchor="w")
         frame_source = tk.Frame(self, bg="#f5f5f5")
         frame_source.pack(fill="x", padx=20)
         tk.Entry(frame_source, textvariable=self.source_dir_var, width=60).pack(side=tk.LEFT, fill="x", expand=True,
@@ -196,8 +196,8 @@ class ZipProcessorPage(tk.Frame):
             side=tk.LEFT)
 
         tk.Label(self, text="Целевая папка для результатов:", font=("ISOCPEUR", 16), bg="#f5f5f5").pack(pady=(15, 0),
-                                                                                                     padx=20,
-                                                                                                     anchor="w")
+                                                                                                        padx=20,
+                                                                                                        anchor="w")
         frame_target = tk.Frame(self, bg="#f5f5f5")
         frame_target.pack(fill="x", padx=20)
         tk.Entry(frame_target, textvariable=self.target_dir_var, width=60).pack(side=tk.LEFT, fill="x", expand=True,
@@ -553,18 +553,22 @@ class MdbCopyPage(tk.Frame):
     MODE_FIAS = "фиас"
     MODE_TEXT = "текст"
     MODE_REPLACE_TABLE = "замена_таблицы"
+    MODE_VRI = "ври"
 
     def __init__(self, parent, controller):
         tk.Frame.__init__(self, parent, bg="#f5f5f5")
         self.controller = controller
 
-        # Переменные для всех четырёх режимов
+        # Переменные для всех режимов
         self.mode_var = tk.StringVar(value=self.MODE_REPLACE_MDB)
 
         # Замена MDB: source папка + target папка
         self.replace_mdb_source_var = tk.StringVar()
         self.replace_mdb_target_var = tk.StringVar()
 
+        # ВРИ: source папка + target папка (аналогично замене MDB)
+        self.vri_source_var = tk.StringVar()
+        self.vri_target_var = tk.StringVar()
 
         # ФИАС: один source mdb + target папка
         self.fias_mdb_var = tk.StringVar()
@@ -597,6 +601,7 @@ class MdbCopyPage(tk.Frame):
 
         modes = [
             (self.MODE_REPLACE_MDB, "Замена MDB"),
+            (self.MODE_VRI, "ВРИ"),
             (self.MODE_FIAS, "Адрес по ФИАС"),
             (self.MODE_TEXT, "Адрес в тексте"),
             (self.MODE_REPLACE_TABLE, "Замена одной таблицы"),
@@ -616,7 +621,7 @@ class MdbCopyPage(tk.Frame):
         tk.Label(self.panel_replace_mdb,
                  text="Source папка (папки с MDB-источниками по индексу):",
                  font=("ISOCPEUR", 16), bg="#f5f5f5").pack(pady=(6, 0), padx=4, anchor="w")
-        fr = tk.Frame(self.panel_replace_mdb, bg="#f5f5f5");
+        fr = tk.Frame(self.panel_replace_mdb, bg="#f5f5f5")
         fr.pack(fill="x", padx=4)
         tk.Entry(fr, textvariable=self.replace_mdb_source_var, width=58).pack(side=tk.LEFT, fill="x", expand=True,
                                                                               padx=(0, 5))
@@ -625,11 +630,42 @@ class MdbCopyPage(tk.Frame):
         tk.Label(self.panel_replace_mdb,
                  text="Target папка (МО или НП):",
                  font=("ISOCPEUR", 16), bg="#f5f5f5").pack(pady=(8, 0), padx=4, anchor="w")
-        fr2 = tk.Frame(self.panel_replace_mdb, bg="#f5f5f5");
+        fr2 = tk.Frame(self.panel_replace_mdb, bg="#f5f5f5")
         fr2.pack(fill="x", padx=4)
         tk.Entry(fr2, textvariable=self.replace_mdb_target_var, width=58).pack(side=tk.LEFT, fill="x", expand=True,
                                                                                padx=(0, 5))
         tk.Button(fr2, text="Выбрать", command=lambda: self._pick_dir(self.replace_mdb_target_var)).pack(side=tk.LEFT)
+
+        # ══════════════════════════════════════════════════════════════════════
+        # Панель "ВРИ": source папка + target папка (замена таблицы Utilizations_KP)
+        # ══════════════════════════════════════════════════════════════════════
+        self.panel_vri = tk.Frame(self, bg="#f5f5f5")
+
+        tk.Label(self.panel_vri,
+                 text="Source папка (папки с MDB-источниками по индексу):",
+                 font=("ISOCPEUR", 16), bg="#f5f5f5").pack(pady=(6, 0), padx=4, anchor="w")
+        tk.Label(self.panel_vri,
+                 text="В каждой папке-индексе берется первый MDB файл,\n"
+                      "из него читается таблица Utilizations_KP",
+                 font=("ISOCPEUR", 16), bg="#f5f5f5", fg="#555").pack(padx=4, anchor="w")
+        fr3 = tk.Frame(self.panel_vri, bg="#f5f5f5")
+        fr3.pack(fill="x", padx=4)
+        tk.Entry(fr3, textvariable=self.vri_source_var, width=58).pack(side=tk.LEFT, fill="x", expand=True,
+                                                                       padx=(0, 5))
+        tk.Button(fr3, text="Выбрать", command=lambda: self._pick_dir(self.vri_source_var)).pack(side=tk.LEFT)
+
+        tk.Label(self.panel_vri,
+                 text="Target папка (МО или НП):",
+                 font=("ISOCPEUR", 16), bg="#f5f5f5").pack(pady=(8, 0), padx=4, anchor="w")
+        tk.Label(self.panel_vri,
+                 text="Во всех MDB с соответствующим индексом в пути\n"
+                      "будет заменена таблица Utilizations_KP",
+                 font=("ISOCPEUR", 16), bg="#f5f5f5", fg="#555").pack(padx=4, anchor="w")
+        fr4 = tk.Frame(self.panel_vri, bg="#f5f5f5")
+        fr4.pack(fill="x", padx=4)
+        tk.Entry(fr4, textvariable=self.vri_target_var, width=58).pack(side=tk.LEFT, fill="x", expand=True,
+                                                                       padx=(0, 5))
+        tk.Button(fr4, text="Выбрать", command=lambda: self._pick_dir(self.vri_target_var)).pack(side=tk.LEFT)
 
         # ══════════════════════════════════════════════════════════════════════
         # Панель "Замена одной таблицы": source MDB + target папка + таблица
@@ -639,20 +675,20 @@ class MdbCopyPage(tk.Frame):
         tk.Label(self.panel_replace_table,
                  text="Source MDB (файл-источник):",
                  font=("ISOCPEUR", 16), bg="#f5f5f5").pack(pady=(6, 0), padx=4, anchor="w")
-        fr3 = tk.Frame(self.panel_replace_table, bg="#f5f5f5");
-        fr3.pack(fill="x", padx=4)
-        tk.Entry(fr3, textvariable=self.replace_table_mdb_var, width=58).pack(side=tk.LEFT, fill="x", expand=True,
+        fr5 = tk.Frame(self.panel_replace_table, bg="#f5f5f5")
+        fr5.pack(fill="x", padx=4)
+        tk.Entry(fr5, textvariable=self.replace_table_mdb_var, width=58).pack(side=tk.LEFT, fill="x", expand=True,
                                                                               padx=(0, 5))
-        tk.Button(fr3, text="Выбрать", command=self._pick_replace_table_mdb).pack(side=tk.LEFT)
+        tk.Button(fr5, text="Выбрать", command=self._pick_replace_table_mdb).pack(side=tk.LEFT)
 
         tk.Label(self.panel_replace_table,
                  text="Target папка (куда копировать таблицу):",
                  font=("ISOCPEUR", 16), bg="#f5f5f5").pack(pady=(8, 0), padx=4, anchor="w")
-        fr4 = tk.Frame(self.panel_replace_table, bg="#f5f5f5");
-        fr4.pack(fill="x", padx=4)
-        tk.Entry(fr4, textvariable=self.replace_table_target_var, width=58).pack(side=tk.LEFT, fill="x", expand=True,
+        fr6 = tk.Frame(self.panel_replace_table, bg="#f5f5f5")
+        fr6.pack(fill="x", padx=4)
+        tk.Entry(fr6, textvariable=self.replace_table_target_var, width=58).pack(side=tk.LEFT, fill="x", expand=True,
                                                                                  padx=(0, 5))
-        tk.Button(fr4, text="Выбрать", command=lambda: self._pick_dir(self.replace_table_target_var)).pack(side=tk.LEFT)
+        tk.Button(fr6, text="Выбрать", command=lambda: self._pick_dir(self.replace_table_target_var)).pack(side=tk.LEFT)
 
         # Выпадающий список таблиц + поле ввода своего имени
         tk.Label(self.panel_replace_table, text="Имя таблицы:",
@@ -676,19 +712,19 @@ class MdbCopyPage(tk.Frame):
         tk.Label(self.panel_fias,
                  text="Source MDB (файл с обновлённой таблицей Locations):",
                  font=("ISOCPEUR", 16), bg="#f5f5f5").pack(pady=(6, 0), padx=4, anchor="w")
-        fr5 = tk.Frame(self.panel_fias, bg="#f5f5f5");
-        fr5.pack(fill="x", padx=4)
-        tk.Entry(fr5, textvariable=self.fias_mdb_var, width=58).pack(side=tk.LEFT, fill="x", expand=True, padx=(0, 5))
-        tk.Button(fr5, text="Выбрать", command=self._pick_fias_mdb).pack(side=tk.LEFT)
+        fr7 = tk.Frame(self.panel_fias, bg="#f5f5f5")
+        fr7.pack(fill="x", padx=4)
+        tk.Entry(fr7, textvariable=self.fias_mdb_var, width=58).pack(side=tk.LEFT, fill="x", expand=True, padx=(0, 5))
+        tk.Button(fr7, text="Выбрать", command=self._pick_fias_mdb).pack(side=tk.LEFT)
 
         tk.Label(self.panel_fias,
                  text="Target папка (все mdb внутри получат обновлённую Locations):",
                  font=("ISOCPEUR", 16), bg="#f5f5f5").pack(pady=(8, 0), padx=4, anchor="w")
-        fr6 = tk.Frame(self.panel_fias, bg="#f5f5f5");
-        fr6.pack(fill="x", padx=4)
-        tk.Entry(fr6, textvariable=self.fias_target_var, width=58).pack(side=tk.LEFT, fill="x", expand=True,
+        fr8 = tk.Frame(self.panel_fias, bg="#f5f5f5")
+        fr8.pack(fill="x", padx=4)
+        tk.Entry(fr8, textvariable=self.fias_target_var, width=58).pack(side=tk.LEFT, fill="x", expand=True,
                                                                         padx=(0, 5))
-        tk.Button(fr6, text="Выбрать", command=lambda: self._pick_dir(self.fias_target_var)).pack(side=tk.LEFT)
+        tk.Button(fr8, text="Выбрать", command=lambda: self._pick_dir(self.fias_target_var)).pack(side=tk.LEFT)
 
         # ══════════════════════════════════════════════════════════════════════
         # Панель «Адрес в тексте»: папка с mdb + галочка "Вне НП"
@@ -702,11 +738,11 @@ class MdbCopyPage(tk.Frame):
                  text="Каждый mdb читает свою таблицу Locations и обновляет\n"
                       "колонку Объект_ЗУ в таблице Титульный_картаплан.",
                  font=("ISOCPEUR", 16), bg="#f5f5f5", fg="#555").pack(padx=4, anchor="w")
-        fr7 = tk.Frame(self.panel_text, bg="#f5f5f5");
-        fr7.pack(fill="x", padx=4)
-        tk.Entry(fr7, textvariable=self.text_folder_var, width=58).pack(side=tk.LEFT, fill="x", expand=True,
+        fr9 = tk.Frame(self.panel_text, bg="#f5f5f5")
+        fr9.pack(fill="x", padx=4)
+        tk.Entry(fr9, textvariable=self.text_folder_var, width=58).pack(side=tk.LEFT, fill="x", expand=True,
                                                                         padx=(0, 5))
-        tk.Button(fr7, text="Выбрать", command=lambda: self._pick_dir(self.text_folder_var)).pack(side=tk.LEFT)
+        tk.Button(fr9, text="Выбрать", command=lambda: self._pick_dir(self.text_folder_var)).pack(side=tk.LEFT)
 
         # Галочка "Вне НП"
         tk.Checkbutton(self.panel_text, text="Вне НП (упрощенный текст без названия НП)",
@@ -735,13 +771,15 @@ class MdbCopyPage(tk.Frame):
 
     def _on_mode_change(self):
         """Показывает нужную панель в зависимости от выбранного режима."""
-        for panel in (self.panel_replace_mdb, self.panel_replace_table,
+        for panel in (self.panel_replace_mdb, self.panel_vri, self.panel_replace_table,
                       self.panel_fias, self.panel_text):
             panel.pack_forget()
 
         mode = self.mode_var.get()
         if mode == self.MODE_REPLACE_MDB:
             self.panel_replace_mdb.pack(fill="x", padx=16, before=self.run_btn)
+        elif mode == self.MODE_VRI:
+            self.panel_vri.pack(fill="x", padx=16, before=self.run_btn)
         elif mode == self.MODE_REPLACE_TABLE:
             self.panel_replace_table.pack(fill="x", padx=16, before=self.run_btn)
         elif mode == self.MODE_FIAS:
@@ -893,12 +931,6 @@ class MdbCopyPage(tk.Frame):
         Полная замена MDB файла: копирует source_mdb поверх target_mdb
         """
         try:
-            # Создаем резервную копию (опционально)
-            backup_path = target_mdb + ".backup"
-            if os.path.exists(backup_path):
-                os.remove(backup_path)
-            shutil.copy2(target_mdb, backup_path)
-
             # Заменяем файл
             shutil.copy2(source_mdb, target_mdb)
             return True
@@ -1038,6 +1070,45 @@ class MdbCopyPage(tk.Frame):
                 self.progress_bar["value"] = i
 
             self._log(f"\n✅ Всего заменено файлов: {total_replaced}")
+
+        # ── ВРИ: замена таблицы Utilizations_KP по индексам ─────────────────
+        elif mode == self.MODE_VRI:
+            source_root = self.vri_source_var.get().strip()
+            target_root = self.vri_target_var.get().strip()
+            if not os.path.isdir(source_root) or not os.path.isdir(target_root):
+                messagebox.showerror("Ошибка", "Укажите корректные папки SOURCE и TARGET!")
+                return
+
+            source_map = self._collect_source_by_index(source_root)
+            if not source_map:
+                self._log("❌ SOURCE MDB-файлы не найдены по индексам.")
+                return
+
+            self.progress_bar["maximum"] = len(source_map)
+            total_tables_replaced = 0
+
+            for i, (index_name, source_mdb) in enumerate(source_map.items(), 1):
+                target_list = self._find_target_mdb_by_index(target_root, index_name)
+                if not target_list:
+                    self._log(f"❌ Нет target MDB для индекса «{index_name}»")
+                    self.progress_bar["value"] = i
+                    continue
+
+                self._log(f"\n🔄 Индекс: {index_name}")
+                self._log(f"   SOURCE: {source_mdb}")
+
+                for target_mdb in target_list:
+                    self._log(f"   → {target_mdb}")
+                    try:
+                        self._copy_table(source_mdb, target_mdb, "Utilizations_KP")
+                        self._log("     ✅ Таблица Utilizations_KP заменена")
+                        total_tables_replaced += 1
+                    except Exception as e:
+                        self._log(f"     ⚠️ ERROR: {e}")
+
+                self.progress_bar["value"] = i
+
+            self._log(f"\n✅ Всего заменено таблиц: {total_tables_replaced}")
 
         # ── Замена одной таблицы: source MDB → все MDB в target папке ────────
         elif mode == self.MODE_REPLACE_TABLE:
