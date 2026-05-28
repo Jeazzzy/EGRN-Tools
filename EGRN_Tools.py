@@ -7,6 +7,11 @@ import xml.etree.ElementTree as ET
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from tkinterdnd2 import DND_FILES, TkinterDnD
+import geopandas as gpd
+import threading
+import warnings
+
+warnings.filterwarnings("ignore")
 
 try:
     import pyodbc
@@ -31,7 +36,13 @@ class Application(TkinterDnD.Tk):
         control_frame.pack(side="top", fill="x")
 
         self.frames = {}
-        for F in (XmlExtractorPage, ZipProcessorPage, MifProjectionPage, MdbCopyPage):
+        for F in (
+                XmlExtractorPage,
+                ZipProcessorPage,
+                MifProjectionPage,
+                MdbCopyPage,
+                TzSplitterPage
+        ):
             page_name = F.__name__
             frame = F(parent=container, controller=self)
             self.frames[page_name] = frame
@@ -45,11 +56,14 @@ class Application(TkinterDnD.Tk):
                              command=lambda: self.show_frame("MifProjectionPage"))
         button4 = ttk.Button(control_frame, text="Работа с MDB",
                              command=lambda: self.show_frame("MdbCopyPage"))
+        button5 = ttk.Button(control_frame, text="Split TZ",
+                             command=lambda: self.show_frame("TzSplitterPage"))
 
         button1.pack(side="left", padx=10, pady=5)
         button2.pack(side="left", padx=10, pady=5)
         button3.pack(side="left", padx=10, pady=5)
         button4.pack(side="left", padx=10, pady=5)
+        button5.pack(side="left", padx=10, pady=5)
 
         self.show_frame("XmlExtractorPage")
 
@@ -1227,6 +1241,244 @@ class MdbCopyPage(tk.Frame):
         messagebox.showinfo("Готово", "Операция завершена.")
         self.progress_bar["value"] = 0
 
+# --- Split TZ ---
+class TzSplitterPage(tk.Frame):
+    def __init__(self, parent, controller):
+        tk.Frame.__init__(self, parent)
+
+        self.controller = controller
+
+        self.np_file = tk.StringVar()
+        self.tz_file = tk.StringVar()
+        self.output_folder = tk.StringVar()
+        self.name_field = tk.StringVar()
+
+        self.build_ui()
+
+    def build_ui(self):
+        p = 10
+
+        frame_np = ttk.LabelFrame(self, text="Таблица НП (границы)")
+        frame_np.pack(fill="x", padx=p, pady=p)
+
+        ttk.Entry(frame_np, textvariable=self.np_file, width=100).pack(
+            side="left", padx=5, pady=5, fill="x", expand=True
+        )
+
+        ttk.Button(
+            frame_np,
+            text="Выбрать",
+            command=self.select_np_file
+        ).pack(side="left", padx=5)
+
+        frame_tz = ttk.LabelFrame(self, text="Таблица ТЗ")
+        frame_tz.pack(fill="x", padx=p, pady=p)
+
+        ttk.Entry(frame_tz, textvariable=self.tz_file, width=100).pack(
+            side="left", padx=5, pady=5, fill="x", expand=True
+        )
+
+        ttk.Button(
+            frame_tz,
+            text="Выбрать",
+            command=self.select_tz_file
+        ).pack(side="left", padx=5)
+
+        frame_out = ttk.LabelFrame(self, text="Папка результата")
+        frame_out.pack(fill="x", padx=p, pady=p)
+
+        ttk.Entry(frame_out, textvariable=self.output_folder, width=100).pack(
+            side="left", padx=5, pady=5, fill="x", expand=True
+        )
+
+        ttk.Button(
+            frame_out,
+            text="Выбрать",
+            command=self.select_output_folder
+        ).pack(side="left", padx=5)
+
+        frame_field = ttk.LabelFrame(self, text="Поле с названием НП")
+        frame_field.pack(fill="x", padx=p, pady=p)
+
+        self.field_combo = ttk.Combobox(
+            frame_field,
+            textvariable=self.name_field,
+            width=50,
+            state="readonly"
+        )
+
+        self.field_combo.pack(padx=5, pady=5, anchor="w")
+
+        ttk.Button(
+            self,
+            text="СТАРТ",
+            command=self.start_processing
+        ).pack(pady=12)
+
+        self.progress = ttk.Progressbar(
+            self,
+            orient="horizontal",
+            mode="determinate"
+        )
+
+        self.progress.pack(fill="x", padx=p, pady=4)
+
+        frame_logs = ttk.LabelFrame(self, text="Логи")
+        frame_logs.pack(fill="both", expand=True, padx=p, pady=p)
+
+        self.log_text = tk.Text(frame_logs, wrap="word")
+        self.log_text.pack(fill="both", expand=True)
+
+    def log(self, text):
+        self.log_text.insert("end", text + "\n")
+        self.log_text.see("end")
+        self.update_idletasks()
+
+    def select_np_file(self):
+        f = filedialog.askopenfilename(
+            filetypes=[("MapInfo TAB", "*.tab")]
+        )
+
+        if f:
+            self.np_file.set(f)
+            self.load_np_fields(f)
+
+    def select_tz_file(self):
+        f = filedialog.askopenfilename(
+            filetypes=[("MapInfo TAB", "*.tab")]
+        )
+
+        if f:
+            self.tz_file.set(f)
+
+    def select_output_folder(self):
+        f = filedialog.askdirectory()
+
+        if f:
+            self.output_folder.set(f)
+
+    def load_np_fields(self, path):
+        try:
+            gdf = gpd.read_file(path)
+
+            fields = [c for c in gdf.columns if c != "geometry"]
+
+            self.field_combo["values"] = fields
+
+            if fields:
+                self.name_field.set(fields[0])
+
+            self.log(f"Поля НП: {fields}")
+
+        except Exception as e:
+            self.log(f"Ошибка чтения полей: {e}")
+
+    @staticmethod
+    def to_safe_filename(name: str) -> str:
+        for ch in r'/\\:*?"<>|':
+            name = name.replace(ch, "_")
+
+        return name.strip()
+
+    @staticmethod
+    def fix_geom(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+        gdf = gdf.copy()
+        gdf["geometry"] = gdf.geometry.buffer(0)
+        gdf = gdf[
+            ~gdf.geometry.is_empty & gdf.is_valid
+        ].reset_index(drop=True)
+
+        return gdf
+
+    def start_processing(self):
+        threading.Thread(target=self.process, daemon=True).start()
+
+    def process(self):
+        try:
+            np_path = self.np_file.get()
+            tz_path = self.tz_file.get()
+            out_dir = self.output_folder.get()
+            name_fld = self.name_field.get()
+
+            if not np_path:
+                messagebox.showerror("Ошибка", "Не выбрана таблица НП")
+                return
+
+            if not tz_path:
+                messagebox.showerror("Ошибка", "Не выбрана таблица ТЗ")
+                return
+
+            if not out_dir:
+                messagebox.showerror("Ошибка", "Не выбрана папка результата")
+                return
+
+            if not name_fld:
+                messagebox.showerror("Ошибка", "Не выбрано поле НП")
+                return
+
+            os.makedirs(out_dir, exist_ok=True)
+
+            self.log("Загрузка данных...")
+
+            np_gdf = gpd.read_file(np_path)
+            tz_gdf = gpd.read_file(tz_path)
+
+            self.log(f"НП: {len(np_gdf)}")
+            self.log(f"ТЗ: {len(tz_gdf)}")
+
+            np_gdf = self.fix_geom(np_gdf)
+            tz_gdf = self.fix_geom(tz_gdf)
+
+            if np_gdf.crs != tz_gdf.crs:
+                self.log("Преобразование CRS...")
+                tz_gdf = tz_gdf.to_crs(np_gdf.crs)
+
+            np_exp = np_gdf.explode(index_parts=False).reset_index(drop=True)
+
+            self.log("Вычисление representative_point...")
+
+            tz_rep = tz_gdf.copy()
+            tz_rep["geometry"] = tz_gdf.geometry.apply(
+                lambda g: g.representative_point()
+            )
+
+            self.log("Spatial Join...")
+
+            joined = gpd.sjoin(
+                tz_rep[["geometry"]],
+                np_exp[[name_fld, "geometry"]],
+                how="left",
+                predicate="within"
+            )
+
+            result = tz_gdf.copy()
+            result["NP_NAME"] = joined[name_fld]
+
+            unique_names = result["NP_NAME"].dropna().unique()
+
+            self.progress["maximum"] = len(unique_names)
+
+            for i, name in enumerate(unique_names, 1):
+                safe_name = self.to_safe_filename(str(name))
+
+                out_path = os.path.join(out_dir, f"{safe_name}.tab")
+
+                subset = result[result["NP_NAME"] == name]
+
+                subset.to_file(out_path, driver="MapInfo File")
+
+                self.log(f"Сохранено: {safe_name}")
+
+                self.progress["value"] = i
+                self.update_idletasks()
+
+            self.log("Готово")
+
+            messagebox.showinfo("Готово", "Разделение завершено")
+
+        except Exception:
+            self.log(traceback.format_exc())
+            messagebox.showerror("Ошибка", "Смотри логи")
 
 # --- Запуск приложения ---
 if __name__ == "__main__":
