@@ -13,6 +13,12 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
+import geopandas as gpd
+import threading
+import warnings
+
+warnings.filterwarnings("ignore")
+
 try:
     import pyodbc
     PYODBC_AVAILABLE = True
