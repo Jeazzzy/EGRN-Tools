@@ -799,14 +799,41 @@ class MdbCopyPage(tk.Frame):
         self.progress_bar = ttk.Progressbar(self, orient="horizontal", mode="determinate", length=550)
         self.progress_bar.pack(padx=20)
 
-        self.log = tk.Text(self, height=8, font=("Consolas", 11),
-                           state="disabled", bg="#1e1e1e", fg="#d4d4d4")
+        self.log = tk.Text(
+            self,
+            height=8,
+            font=("Consolas", 11),
+            bg="#1e1e1e",
+            fg="#d4d4d4",
+            insertbackground="white",
+            wrap="word"
+        )
+
         self.log.pack(fill="both", expand=True, padx=20, pady=8)
 
+        # ПКМ
         self.log_menu = tk.Menu(self, tearoff=0)
-        self.log_menu.add_command(label="Копировать", command=self._copy_log)
 
-        self._on_mode_change()
+        self.log_menu.add_command(
+            label="Копировать",
+            command=self._copy_log
+        )
+
+        self.log_menu.add_command(
+            label="Выделить всё",
+            command=lambda: self.log.tag_add("sel", "1.0", "end")
+        )
+
+        self.log.bind("<Button-3>", self._show_log_menu)
+
+        # CTRL
+        self.log.bind("<Control-Key>", self._on_key_press)
+
+        # фокус
+        self.log.bind("<1>", lambda e: self.log.focus_set())
+
+        # запрет ручного ввода
+        self.log.bind("<Key>", lambda e: "break")
 
     # ── UI-хелперы ───────────────────────────────────────────────────────────
 
@@ -878,16 +905,12 @@ class MdbCopyPage(tk.Frame):
             messagebox.showerror("Ошибка", f"Не удалось загрузить список таблиц:\n{e}")
 
     def _log(self, text):
-        self.log.configure(state="normal")
         self.log.insert("end", text + "\n")
         self.log.see("end")
-        self.log.configure(state="disabled")
         self.update_idletasks()
 
     def _log_clear(self):
-        self.log.configure(state="normal")
         self.log.delete("1.0", "end")
-        self.log.configure(state="disabled")
 
     def _copy_log(self, event=None):
         try:
@@ -1334,6 +1357,50 @@ class TzSplitterPage(tk.Frame):
 
         self.log_text = tk.Text(frame_logs, wrap="word")
         self.log_text.pack(fill="both", expand=True)
+
+        # ПКМ меню для логов
+        self.log_menu = tk.Menu(self, tearoff=0)
+
+        self.log_menu.add_command(
+            label="Копировать",
+            command=self.copy_log_selection
+        )
+
+        self.log_menu.add_command(
+            label="Выделить всё",
+            command=lambda: self.log_text.tag_add("sel", "1.0", "end")
+        )
+
+        self.log_text.bind("<Button-3>", self.show_log_menu)
+
+        # Ctrl+C / Ctrl+A
+        self.log_text.bind("<Control-Key>", self.on_log_key)
+
+        # фокус по клику
+        self.log_text.bind("<1>", lambda e: self.log_text.focus_set())
+
+    def show_log_menu(self, event):
+        self.log_menu.tk_popup(event.x_root, event.y_root)
+
+    def copy_log_selection(self):
+        try:
+            text = self.log_text.get("sel.first", "sel.last")
+            self.clipboard_clear()
+            self.clipboard_append(text)
+        except tk.TclError:
+            pass
+
+    def on_log_key(self, event):
+        if event.state & 0x4:
+            key = event.keysym.lower()
+
+            if key in ("c", "с") or event.keycode == 67:
+                self.copy_log_selection()
+                return "break"
+
+            if key in ("a", "ф") or event.keycode == 65:
+                self.log_text.tag_add("sel", "1.0", "end")
+                return "break"
 
     def log(self, text):
         self.log_text.insert("end", text + "\n")
