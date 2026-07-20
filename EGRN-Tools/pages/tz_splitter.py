@@ -27,7 +27,7 @@ class TzSplitterPage(BasePage):
         # Заголовок
         tk.Label(
             main_container,
-            text="✂️ Разделение территориальных зон",
+            text="Разделение территориальных зон",
             font=("ISOCPEUR", 20, "bold"),
             bg="#f5f5f5",
             fg="#2c3e50"
@@ -93,7 +93,7 @@ class TzSplitterPage(BasePage):
         # Папка результата
         frame_out = tk.LabelFrame(
             fields_frame,
-            text="📁 Папка результата",
+            text="Папка результата",
             font=("ISOCPEUR", 13, "bold"),
             bg="#f5f5f5",
             padx=10,
@@ -118,7 +118,7 @@ class TzSplitterPage(BasePage):
         # Поле с названием НП
         frame_field = tk.LabelFrame(
             fields_frame,
-            text="🏷️ Поле с названием НП",
+            text="Поле с названием НП",
             font=("ISOCPEUR", 13, "bold"),
             bg="#f5f5f5",
             padx=10,
@@ -159,7 +159,7 @@ class TzSplitterPage(BasePage):
         # Логи
         frame_logs = tk.LabelFrame(
             main_container,
-            text="📋 Логи",
+            text="Логи",
             font=("ISOCPEUR", 13, "bold"),
             bg="#f5f5f5",
             padx=10,
