@@ -20,7 +20,7 @@ class HelpPage(BasePage):
 
         tk.Label(
             title_frame,
-            text="Справка по инструментам",
+            text="K Tools - Кадастровые инструменты",
             font=("ISOCPEUR", 22, "bold"),
             bg="#f5f5f5",
             fg="#2c3e50"
@@ -28,7 +28,7 @@ class HelpPage(BasePage):
 
         tk.Label(
             title_frame,
-            text="Краткое описание всех инструментов EGRN-Tools",
+            text="Краткое описание всех инструментов",
             font=("ISOCPEUR", 14),
             bg="#f5f5f5",
             fg="#555"

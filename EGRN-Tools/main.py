@@ -11,12 +11,19 @@ from pages import (
     XmlIndexCheckerPage,
     HelpPage
 )
+import os
+import sys
 
 
 class Application(TkinterDnD.Tk):
     def __init__(self, *args, **kwargs):
         TkinterDnD.Tk.__init__(self, *args, **kwargs)
-        self.title("EGRN Tools + XML Checker")
+
+        # Новое название приложения
+        self.title("K Tools - Кадастровые инструменты")
+
+        # Установка иконки
+        self.set_icon()
 
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
@@ -60,6 +67,33 @@ class Application(TkinterDnD.Tk):
             button.pack(side="left", padx=10, pady=5)
 
         self.show_frame("HelpPage")
+
+    def set_icon(self):
+        """Установка иконки приложения"""
+        try:
+            # Получаем путь к текущему файлу
+            if getattr(sys, 'frozen', False):
+                # Запущено как .exe
+                base_path = sys._MEIPASS
+            else:
+                # Запущено как скрипт
+                base_path = os.path.dirname(os.path.abspath(__file__))
+
+            icon_path = os.path.join(base_path, "icon.ico")
+
+            if os.path.exists(icon_path):
+                # Устанавливаем иконку для окна
+                self.iconbitmap(default=icon_path)
+
+                # Для Windows также устанавливаем иконку в заголовок
+                try:
+                    self.iconbitmap(icon_path)
+                except:
+                    pass
+            else:
+                print(f"Иконка не найдена: {icon_path}")
+        except Exception as e:
+            print(f"Ошибка установки иконки: {e}")
 
     def show_frame(self, page_name):
         frame = self.frames[page_name]
