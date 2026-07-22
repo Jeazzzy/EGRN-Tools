@@ -398,20 +398,6 @@ class XmlIndexCheckerPage(BasePage):
             return
 
         data = self.results[settlement]
-        districts = {}
-        for index_data in data.values():
-            if index_data.get("district"):
-                district = index_data["district"]
-                if district not in districts:
-                    districts[district] = []
-                if index_data.get("index"):
-                    districts[district].append(index_data["index"])
 
-        if len(districts) == 1:
-            messagebox.showinfo(
-                "Информация",
-                f"В населенном пункте '{settlement}' все индексы принадлежат одному району: {list(districts.keys())[0]}"
-            )
-            return
-
+        # Всегда открываем окно деталей, независимо от количества районов
         DetailWindow(self, settlement, data)

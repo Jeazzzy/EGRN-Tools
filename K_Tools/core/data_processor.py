@@ -45,18 +45,20 @@ class DataProcessor:
 
     @staticmethod
     def process_folder(base_path, progress_callback=None):
-        """Обрабатывает папку с населенными пунктами"""
+        """
+        Обрабатывает папку.
+        Если в папке есть подпапки с ZIP-архивами, обрабатывает её как один населенный пункт.
+        Иначе обрабатывает все подпапки как отдельные населенные пункты.
+        """
+        base_path = Path(base_path)
         results = {}
-        total = 0
         processed = 0
 
-        settlements = [p for p in base_path.iterdir() if p.is_dir()]
-        total = len(settlements)
-
-        for settlement in settlements:
+        # --- Функция для обработки одной папки населенного пункта ---
+        def process_settlement(settlement_path):
             settlement_data = {}
-
-            for index_folder in settlement.iterdir():
+            # Проверяем все подпапки внутри settlement_path, они должны быть индексами
+            for index_folder in settlement_path.iterdir():
                 if not index_folder.is_dir():
                     continue
 
@@ -71,12 +73,39 @@ class DataProcessor:
                 else:
                     settlement_data[index_folder.name] = {"district": district, "index": index}
 
-            if settlement_data:
-                results[settlement.name] = settlement_data
+            return settlement_data
 
-            processed += 1
+        # --- Основная логика ---
+        # Проверяем, является ли текущая папка напрямую населенным пунктом.
+        # Для этого ищем в ней подпапки, которые могут содержать ZIP-архивы.
+        # Если находим хотя бы одну такую подпапку, считаем, что это НП.
+        is_direct_settlement = False
+        for item in base_path.iterdir():
+            if item.is_dir():
+                # Проверяем, есть ли в этой подпапке zip-архивы
+                if any(item.glob("*.zip")):
+                    is_direct_settlement = True
+                    break
+
+        if is_direct_settlement:
+            # --- Случай 1: Обрабатываем текущую папку как один НП ---
+            settlement_data = process_settlement(base_path)
+            if settlement_data:
+                results[base_path.name] = settlement_data
             if progress_callback:
-                progress_callback(processed, total)
+                progress_callback(1, 1)  # Сообщаем о завершении
+        else:
+            # --- Случай 2: Обрабатываем все подпапки как НП (старая логика) ---
+            settlements = [p for p in base_path.iterdir() if p.is_dir()]
+            total = len(settlements)
+            for settlement in settlements:
+                settlement_data = process_settlement(settlement)
+                if settlement_data:
+                    results[settlement.name] = settlement_data
+
+                processed += 1
+                if progress_callback:
+                    progress_callback(processed, total)
 
         return results
 
