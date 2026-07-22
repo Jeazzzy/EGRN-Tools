@@ -6,6 +6,7 @@ import threading
 from tkinterdnd2 import DND_FILES
 from core import BasePage, DataProcessor
 
+
 class DetailWindow:
     """Окно деталей для анализа XML"""
 
@@ -82,13 +83,31 @@ class DetailWindow:
         self.detail_menu.add_command(label="📋 Копировать всё", command=self.copy_detail_all)
         self.detail_table.bind("<Button-3>", self.show_detail_menu)
 
+        # ========== ИСПРАВЛЕННЫЕ ХОТКЕИ ==========
+        # Устанавливаем фокус на таблицу при открытии окна
+        self.detail_table.focus_set()
+
+        # Биндим хоткеи на уровне окна
         self.window.bind("<Control-c>", lambda e: self.copy_detail_selected())
         self.window.bind("<Control-C>", lambda e: self.copy_detail_selected())
         self.window.bind("<Control-a>", lambda e: self.copy_detail_all())
         self.window.bind("<Control-A>", lambda e: self.copy_detail_all())
+
+        # Также биндим на таблицу (на случай, если фокус там)
+        self.detail_table.bind("<Control-c>", lambda e: self.copy_detail_selected())
+        self.detail_table.bind("<Control-C>", lambda e: self.copy_detail_selected())
+        self.detail_table.bind("<Control-a>", lambda e: self.copy_detail_all())
+        self.detail_table.bind("<Control-A>", lambda e: self.copy_detail_all())
+
+        # Чтобы таблица получала фокус при клике
         self.detail_table.bind("<Button-1>", self.on_detail_table_click)
 
+        # Биндим Escape для закрытия окна
+        self.window.bind("<Escape>", lambda e: self.on_close())
+
     def on_detail_table_click(self, event):
+        """Устанавливаем фокус на таблицу при клике"""
+        self.detail_table.focus_set()
         region = self.detail_table.identify_region(event.x, event.y)
         if region == "heading":
             return
@@ -124,6 +143,8 @@ class DetailWindow:
     def copy_detail_selected(self):
         rows = self.detail_table.selection()
         if not rows:
+            # Если ничего не выделено, копируем всё
+            messagebox.showinfo("Информация", "Ничего не выделено. Используйте Ctrl+A для выделения всего.")
             return
 
         text = []
@@ -133,6 +154,9 @@ class DetailWindow:
 
         self.window.clipboard_clear()
         self.window.clipboard_append("\n".join(text))
+
+        # Показываем статус в заголовке окна
+        self.window.title(f"Детали: {settlement} (скопировано {len(rows)} строк)")
 
     def copy_detail_all(self):
         all_items = self.detail_table.get_children()
@@ -164,6 +188,25 @@ class XmlIndexCheckerPage(BasePage):
         self.processing = False
         self.sort_state = {}
         self.build_ui()
+
+        # Глобальные хоткеи для главного окна
+        self.bind_global_hotkeys()
+
+    def bind_global_hotkeys(self):
+        """Привязывает глобальные хоткеи для страницы"""
+        # Ctrl+A для выделения всего
+        self.bind_all("<Control-a>", lambda e: self.select_all_table())
+        self.bind_all("<Control-A>", lambda e: self.select_all_table())
+        # Ctrl+C для копирования
+        self.bind_all("<Control-c>", lambda e: self.copy_selected())
+        self.bind_all("<Control-C>", lambda e: self.copy_selected())
+
+    def select_all_table(self):
+        """Выделяет все строки в таблице"""
+        all_items = self.table.get_children()
+        if all_items:
+            self.table.selection_set(all_items)
+            self.table.focus_set()
 
     def build_ui(self):
         # Основной контейнер
@@ -224,8 +267,13 @@ class XmlIndexCheckerPage(BasePage):
         table_frame.rowconfigure(0, weight=1)
         table_frame.columnconfigure(0, weight=1)
 
+        # Даем фокус таблице для работы хоткеев
+        self.table.focus_set()
+
         self.table.bind("<Double-1>", self.on_double_click)
         self.table.bind("<Button-3>", self.show_main_menu)
+        # Биндим клик на таблицу, чтобы установить фокус
+        self.table.bind("<Button-1>", self.on_table_click)
 
         # Контекстное меню для таблицы
         self.main_menu = tk.Menu(self, tearoff=0)
@@ -243,6 +291,13 @@ class XmlIndexCheckerPage(BasePage):
 
         self.progress_bar = ttk.Progressbar(status_frame, length=200, mode='determinate')
         self.progress_bar.pack(side=tk.RIGHT, padx=(10, 0))
+
+    def on_table_click(self, event):
+        """Устанавливаем фокус на таблицу при клике"""
+        self.table.focus_set()
+        region = self.table.identify_region(event.x, event.y)
+        if region == "heading":
+            return
 
     def drop_path(self, event):
         files = self.master.tk.splitlist(event.data)
@@ -351,9 +406,10 @@ class XmlIndexCheckerPage(BasePage):
         self.sort_state[col] = not reverse
         self.table.selection_remove(*self.table.selection())
 
-    def copy_selected(self):
+    def copy_selected(self, event=None):
         rows = self.table.selection()
         if not rows:
+            messagebox.showinfo("Информация", "Ничего не выделено. Используйте Ctrl+A для выделения всего.")
             return
 
         text = []
@@ -365,7 +421,7 @@ class XmlIndexCheckerPage(BasePage):
         self.clipboard_append("\n".join(text))
         self.status_label.config(text=f"Скопировано строк: {len(rows)}")
 
-    def copy_all(self):
+    def copy_all(self, event=None):
         all_items = self.table.get_children()
         if not all_items:
             return
@@ -399,5 +455,5 @@ class XmlIndexCheckerPage(BasePage):
 
         data = self.results[settlement]
 
-        # Всегда открываем окно деталей, независимо от количества районов
+        # Всегда открываем окно деталей
         DetailWindow(self, settlement, data)
