@@ -139,75 +139,64 @@ class TzSplitterPage(BasePage):
             font=("ISOCPEUR", 13, "bold"),
             bg="#f5f5f5",
             padx=10,
-            pady=8
+            pady=5
         )
         frame_thresholds.pack(fill="x", pady=5)
 
+        # Кнопка сброса
         tk.Button(
             frame_thresholds,
             text="Сбросить",
-            font=("ISOCPEUR", 10),
+            font=("ISOCPEUR", 12),
             command=self.reset_thresholds
-        ).pack(side="right", padx=5, pady=5)
+        ).pack(side="right", padx=5)
 
         # Внутренний контейнер для двух ползунков
-        thresholds_inner = tk.Frame(frame_thresholds, bg="#f5f5f5")
-        thresholds_inner.pack(fill="x", padx=5, pady=5)
+        thresholds_row = tk.Frame(frame_thresholds, bg="#f5f5f5")
+        thresholds_row.pack(fill="x", padx=5, pady=2)
 
-        # ---- Ползунок 1: Порог "в НП" ----
-        frame_in = tk.Frame(thresholds_inner, bg="#f5f5f5")
-        frame_in.pack(side="left", fill="x", expand=True, padx=(0, 10))
-
-        tk.Label(frame_in, text="Порог 'в НП' (≥):", font=("ISOCPEUR", 11), bg="#f5f5f5").pack(anchor="w")
+        # Ползунок 1: в НП
+        tk.Label(thresholds_row, text="в НП ≥", font=("ISOCPEUR", 10), bg="#f5f5f5").pack(side="left", padx=(0, 2))
         self.threshold_in_var = tk.DoubleVar(value=0.98)
         scale_in = tk.Scale(
-            frame_in,
+            thresholds_row,
             from_=0.50, to=1.00, resolution=0.01,
             orient="horizontal",
             variable=self.threshold_in_var,
-            length=200,
+            length=120,
             bg="#f5f5f5",
             highlightthickness=0
         )
-        scale_in.pack(fill="x")
-        # Отображение значения
-        self.threshold_in_label = tk.Label(frame_in, text="0.98", font=("ISOCPEUR", 10), bg="#f5f5f5")
-        self.threshold_in_label.pack(anchor="e")
-
-        # Связываем ползунок с меткой
+        scale_in.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        self.threshold_in_label = tk.Label(thresholds_row, text="0.98", font=("ISOCPEUR", 10), bg="#f5f5f5", width=5)
+        self.threshold_in_label.pack(side="left")
         scale_in.config(command=lambda v: self.threshold_in_label.config(text=f"{float(v):.2f}"))
 
-        # ---- Ползунок 2: Порог "вне НП" ----
-        frame_out = tk.Frame(thresholds_inner, bg="#f5f5f5")
-        frame_out.pack(side="left", fill="x", expand=True)
-
-        tk.Label(frame_out, text="Порог 'вне НП' (<):", font=("ISOCPEUR", 11), bg="#f5f5f5").pack(anchor="w")
+        # Ползунок 2: вне НП
+        tk.Label(thresholds_row, text="вне НП <", font=("ISOCPEUR", 10), bg="#f5f5f5").pack(side="left", padx=(10, 2))
         self.threshold_out_var = tk.DoubleVar(value=0.02)
         scale_out = tk.Scale(
-            frame_out,
+            thresholds_row,
             from_=0.00, to=0.50, resolution=0.01,
             orient="horizontal",
             variable=self.threshold_out_var,
-            length=200,
+            length=120,
             bg="#f5f5f5",
             highlightthickness=0
         )
-        scale_out.pack(fill="x")
-        # Отображение значения
-        self.threshold_out_label = tk.Label(frame_out, text="0.02", font=("ISOCPEUR", 10), bg="#f5f5f5")
-        self.threshold_out_label.pack(anchor="e")
-
-        # Связываем ползунок с меткой
+        scale_out.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        self.threshold_out_label = tk.Label(thresholds_row, text="0.02", font=("ISOCPEUR", 10), bg="#f5f5f5", width=5)
+        self.threshold_out_label.pack(side="left")
         scale_out.config(command=lambda v: self.threshold_out_label.config(text=f"{float(v):.2f}"))
 
-        # Пояснение (опционально)
+        # Пояснение
         tk.Label(
             frame_thresholds,
             text="≥ Порог 'в НП' → в НП | < Порог 'вне НП' → вне НП | между → Сомнительные",
             font=("ISOCPEUR", 12),
             fg="#555555",
             bg="#f5f5f5"
-        ).pack(pady=(0, 5))
+        ).pack(pady=(0, 3))
 
         # === Кнопка СТАРТ (как была) ===
         tk.Button(
