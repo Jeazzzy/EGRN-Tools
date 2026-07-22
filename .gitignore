@@ -1,3 +1,4 @@
-/dist
-/build
+/.venv
 /.idea
+/K_Tools/build
+/K_Tools/dist
