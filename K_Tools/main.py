@@ -28,8 +28,8 @@ class Application(TkinterDnD.Tk):
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
 
-        window_width = 1100
-        window_height = 900
+        window_width = 900
+        window_height = 1100
 
         x = (screen_width - window_width) // 2
         y = (screen_height - window_height) // 2
