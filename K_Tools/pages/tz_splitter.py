@@ -46,7 +46,23 @@ class TzSplitterPage(BasePage):
             padx=10,
             pady=8
         )
+        frame_np.pack(fill="x", pady=5)  # ← ЭТО ДОБАВИТЬ!
 
+        tk.Entry(
+            frame_np,
+            textvariable=self.np_file,
+            font=("ISOCPEUR", 12),
+            width=70
+        ).pack(side="left", padx=(0, 10), fill="x", expand=True)
+
+        tk.Button(
+            frame_np,
+            text="Выбрать",
+            font=("ISOCPEUR", 12),
+            command=self.select_np_file
+        ).pack(side="right")
+
+        # Таблица ТЗ
         frame_tz = tk.LabelFrame(
             fields_frame,
             text="Таблица ТЗ",
@@ -55,25 +71,6 @@ class TzSplitterPage(BasePage):
             padx=10,
             pady=8
         )
-
-        frame_out = tk.LabelFrame(
-            fields_frame,
-            text="Папка результата",
-            font=("ISOCPEUR", 13, "bold"),
-            bg="#f5f5f5",
-            padx=10,
-            pady=8
-        )
-
-        frame_field = tk.LabelFrame(
-            fields_frame,
-            text="Поле с названием НП",
-            font=("ISOCPEUR", 13, "bold"),
-            bg="#f5f5f5",
-            padx=10,
-            pady=8
-        )
-
         frame_tz.pack(fill="x", pady=5)
 
         tk.Entry(
@@ -262,9 +259,18 @@ class TzSplitterPage(BasePage):
                 subset = result[result["NP_NAME"] == name]
                 subset.to_file(out_path, driver="MapInfo File")
                 self.log(f"Сохранено: {safe_name}")
+
+                if os.path.exists(out_path):
+                    self.log(f"✅ Файл реально создан: {out_path}")
+                    # Проверяем размер файла
+                    size = os.path.getsize(out_path)
+                    self.log(f"   Размер: {size} байт")
+                else:
+                    self.log(f"❌ А вот файла нет! {out_path}")
+
                 self.progress["value"] = i
                 self.update_idletasks()
-
+                self.log(f"Сохраняю в: {out_dir}")
             self.log("Готово")
             messagebox.showinfo("Готово", "Разделение завершено")
         except Exception:
