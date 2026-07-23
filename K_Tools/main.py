@@ -1,105 +1,68 @@
-# main.py
-import tkinter as tk
-from tkinter import ttk
-from tkinterdnd2 import TkinterDnD
-from pages import (
-    XmlExtractorPage,
-    ZipProcessorPage,
-    MifProjectionPage,
-    MdbCopyPage,
-    TzSplitterPage,
-    XmlIndexCheckerPage,
-    HelpPage
-)
 import os
 import sys
 
+from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import QApplication, QMainWindow, QTabWidget
 
-class Application(TkinterDnD.Tk):
-    def __init__(self, *args, **kwargs):
-        TkinterDnD.Tk.__init__(self, *args, **kwargs)
+from qt_pages import (
+    HelpPage,
+    MdbCopyPage,
+    MifProjectionPage,
+    TzSplitterPage,
+    XmlExtractorPage,
+    XmlIndexCheckerPage,
+    ZipProcessorPage,
+)
 
-        # Новое название приложения
-        self.title("K Tools - Кадастровые инструменты")
 
-        # Установка иконки
+class Application(QMainWindow):
+    """Главное окно приложения на PySide6."""
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("K Tools - Кадастровые инструменты")
+        self.resize(1000, 800)
+        self.setMinimumSize(1000, 800)
         self.set_icon()
 
-        screen_width = self.winfo_screenwidth()
-        screen_height = self.winfo_screenheight()
-
-        window_width = 900
-        window_height = 900
-
-        x = (screen_width - window_width) // 2
-        y = (screen_height - window_height) // 2
-
-        self.geometry(f"{window_width}x{window_height}+{x}+{y}")
-        self.minsize(1000, 800)
-
-        container = tk.Frame(self)
-        container.pack(side="bottom", fill="both", expand=True)
-        container.grid_rowconfigure(0, weight=1)
-        container.grid_columnconfigure(0, weight=1)
-
-        control_frame = tk.Frame(self, bg="#f0f0f0")
-        control_frame.pack(side="top", fill="x")
-
-        self.frames = {}
+        self.tabs = QTabWidget()
+        self.setCentralWidget(self.tabs)
         pages = [
+            ("Справка", HelpPage),
             ("XML -> CSV", XmlExtractorPage),
             ("Распаковка ZIP", ZipProcessorPage),
             ("Исправление MIF", MifProjectionPage),
             ("Работа с MDB", MdbCopyPage),
             ("ТЗ по НП", TzSplitterPage),
             ("Анализ XML", XmlIndexCheckerPage),
-            ("Справка", HelpPage)
         ]
+        for title, page_class in pages:
+            self.tabs.addTab(page_class(self), title)
 
-        for text, page_class in pages:
-            page_name = page_class.__name__
-            frame = page_class(parent=container, controller=self)
-            self.frames[page_name] = frame
-            frame.grid(row=0, column=0, sticky="nsew")
-
-            button = ttk.Button(control_frame, text=text,
-                                command=lambda p=page_name: self.show_frame(p))
-            button.pack(side="left", padx=10, pady=5)
-
-        self.show_frame("HelpPage")
+        self.setStyleSheet("""
+            QWidget { background: #f5f5f5; font-family: ISOCPEUR, Arial; font-size: 14px; }
+            QLabel#pageTitle { color: #2c3e50; font-size: 24px; font-weight: 700; padding: 12px; }
+            QPushButton { background: #87CEEB; color: white; border: 0; border-radius: 6px; padding: 8px 14px; font-weight: 700; }
+            QPushButton:hover { background: #68bfe3; }
+            QLineEdit, QTextEdit, QComboBox { background: white; border: 1px solid #cfcfcf; border-radius: 4px; padding: 6px; }
+            QTabWidget::pane { border: 1px solid #ddd; }
+            QTabBar::tab { background: #e9ecef; padding: 10px 14px; }
+            QTabBar::tab:selected { background: white; color: #2c3e50; font-weight: 700; }
+        """)
 
     def set_icon(self):
-        """Установка иконки приложения"""
-        try:
-            # Получаем путь к текущему файлу
-            if getattr(sys, 'frozen', False):
-                # Запущено как .exe
-                base_path = sys._MEIPASS
-            else:
-                # Запущено как скрипт
-                base_path = os.path.dirname(os.path.abspath(__file__))
+        base_path = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+        icon_path = os.path.join(base_path, "icon.ico")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
 
-            icon_path = os.path.join(base_path, "icon.ico")
 
-            if os.path.exists(icon_path):
-                # Устанавливаем иконку для окна
-                self.iconbitmap(default=icon_path)
-
-                # Для Windows также устанавливаем иконку в заголовок
-                try:
-                    self.iconbitmap(icon_path)
-                except:
-                    pass
-            else:
-                print(f"Иконка не найдена: {icon_path}")
-        except Exception as e:
-            print(f"Ошибка установки иконки: {e}")
-
-    def show_frame(self, page_name):
-        frame = self.frames[page_name]
-        frame.tkraise()
+def main():
+    app = QApplication(sys.argv)
+    window = Application()
+    window.show()
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":
-    app = Application()
-    app.mainloop()
+    main()
