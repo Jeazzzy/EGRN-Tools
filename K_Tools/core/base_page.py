@@ -25,16 +25,21 @@ class BasePage(tk.Frame):
         )
         return self.progress_bar
 
-    def setup_log_area(self, height=8):
+    def setup_log_area(self, height=8, parent=None):
         """Создает область для логов"""
+        master = parent or self
         self.log_text = tk.Text(
-            self,
+            master,
             height=height,
             font=("Consolas", 11),
-            bg="#1e1e1e",
-            fg="#d4d4d4",
-            insertbackground="white",
-            wrap="word"
+            bg="white",
+            fg="#1f1f1f",
+            insertbackground="#1f1f1f",
+            selectbackground="#0078d7",
+            selectforeground="white",
+            wrap="word",
+            relief="solid",
+            borderwidth=1
         )
 
         # Контекстное меню для логов
@@ -45,10 +50,14 @@ class BasePage(tk.Frame):
         )
         self.log_menu.add_command(
             label="Выделить всё",
-            command=lambda: self.log_text.tag_add("sel", "1.0", "end")
+            command=self.select_all_log
         )
 
         self.log_text.bind("<Button-3>", self.show_log_menu)
+        self.log_text.bind("<Control-a>", self.select_all_log)
+        self.log_text.bind("<Control-A>", self.select_all_log)
+        self.log_text.bind("<Control-c>", self.copy_log)
+        self.log_text.bind("<Control-C>", self.copy_log)
         self.log_text.bind("<Control-Key>", self.on_log_key_press)
         self.log_text.bind("<1>", lambda e: self.log_text.focus_set())
         self.log_text.bind("<Key>", lambda e: "break")
@@ -70,6 +79,16 @@ class BasePage(tk.Frame):
             self.clipboard_append(selected_text)
         except tk.TclError:
             pass
+        return "break"
+
+    def select_all_log(self, event=None):
+        """Выделяет весь текст лога"""
+        if self.log_text:
+            self.log_text.focus_set()
+            self.log_text.tag_add("sel", "1.0", "end-1c")
+            self.log_text.mark_set("insert", "1.0")
+            self.log_text.see("insert")
+        return "break"
 
     def show_log_menu(self, event):
         """Показывает контекстное меню лога"""
@@ -83,7 +102,7 @@ class BasePage(tk.Frame):
                 self.copy_log()
                 return "break"
             if key in ("a", "ф") or event.keycode == 65:
-                self.log_text.tag_add("sel", "1.0", "end")
+                self.select_all_log()
                 return "break"
 
     def clear_log(self):

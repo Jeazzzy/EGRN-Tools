@@ -12,6 +12,7 @@ class DetailWindow:
 
     def __init__(self, parent, settlement, data):
         self.parent = parent
+        self.settlement = settlement
         self.window = tk.Toplevel(parent)
         self.window.title(f"Детали: {settlement}")
         self.window.transient(parent)
@@ -88,16 +89,16 @@ class DetailWindow:
         self.detail_table.focus_set()
 
         # Биндим хоткеи на уровне окна
-        self.window.bind("<Control-c>", lambda e: self.copy_detail_selected())
-        self.window.bind("<Control-C>", lambda e: self.copy_detail_selected())
-        self.window.bind("<Control-a>", lambda e: self.copy_detail_all())
-        self.window.bind("<Control-A>", lambda e: self.copy_detail_all())
+        self.window.bind("<Control-c>", self.copy_detail_selected)
+        self.window.bind("<Control-C>", self.copy_detail_selected)
+        self.window.bind("<Control-a>", self.copy_detail_all)
+        self.window.bind("<Control-A>", self.copy_detail_all)
 
         # Также биндим на таблицу (на случай, если фокус там)
-        self.detail_table.bind("<Control-c>", lambda e: self.copy_detail_selected())
-        self.detail_table.bind("<Control-C>", lambda e: self.copy_detail_selected())
-        self.detail_table.bind("<Control-a>", lambda e: self.copy_detail_all())
-        self.detail_table.bind("<Control-A>", lambda e: self.copy_detail_all())
+        self.detail_table.bind("<Control-c>", self.copy_detail_selected)
+        self.detail_table.bind("<Control-C>", self.copy_detail_selected)
+        self.detail_table.bind("<Control-a>", self.copy_detail_all)
+        self.detail_table.bind("<Control-A>", self.copy_detail_all)
 
         # Чтобы таблица получала фокус при клике
         self.detail_table.bind("<Button-1>", self.on_detail_table_click)
@@ -140,12 +141,12 @@ class DetailWindow:
         finally:
             self._sorting = False
 
-    def copy_detail_selected(self):
+    def copy_detail_selected(self, event=None):
         rows = self.detail_table.selection()
         if not rows:
             # Если ничего не выделено, копируем всё
             messagebox.showinfo("Информация", "Ничего не выделено. Используйте Ctrl+A для выделения всего.")
-            return
+            return "break"
 
         text = []
         for row in rows:
@@ -156,14 +157,15 @@ class DetailWindow:
         self.window.clipboard_append("\n".join(text))
 
         # Показываем статус в заголовке окна
-        self.window.title(f"Детали: {settlement} (скопировано {len(rows)} строк)")
+        self.window.title(f"Детали: {self.settlement} (скопировано {len(rows)} строк)")
+        return "break"
 
-    def copy_detail_all(self):
+    def copy_detail_all(self, event=None):
         all_items = self.detail_table.get_children()
         if not all_items:
-            return
+            return "break"
         self.detail_table.selection_set(all_items)
-        self.copy_detail_selected()
+        return self.copy_detail_selected()
 
     def show_detail_menu(self, event):
         selection = self.detail_table.selection()
@@ -195,23 +197,24 @@ class XmlIndexCheckerPage(BasePage):
     def bind_global_hotkeys(self):
         """Привязывает глобальные хоткеи для страницы"""
         # Ctrl+A для выделения всего
-        self.bind_all("<Control-a>", lambda e: self.select_all_table())
-        self.bind_all("<Control-A>", lambda e: self.select_all_table())
+        self.table.bind("<Control-a>", self.select_all_table)
+        self.table.bind("<Control-A>", self.select_all_table)
         # Ctrl+C для копирования
-        self.bind_all("<Control-c>", lambda e: self.copy_selected())
-        self.bind_all("<Control-C>", lambda e: self.copy_selected())
+        self.table.bind("<Control-c>", self.copy_selected)
+        self.table.bind("<Control-C>", self.copy_selected)
 
-    def select_all_table(self):
+    def select_all_table(self, event=None):
         """Выделяет все строки в таблице"""
         all_items = self.table.get_children()
         if all_items:
             self.table.selection_set(all_items)
             self.table.focus_set()
+        return "break"
 
     def build_ui(self):
         # Основной контейнер
         main_container = tk.Frame(self, bg="#f5f5f5")
-        main_container.pack(fill="both", expand=True)
+        main_container.pack(fill="x")
 
         # Заголовок
         tk.Label(
@@ -420,6 +423,7 @@ class XmlIndexCheckerPage(BasePage):
         self.clipboard_clear()
         self.clipboard_append("\n".join(text))
         self.status_label.config(text=f"Скопировано строк: {len(rows)}")
+        return "break"
 
     def copy_all(self, event=None):
         all_items = self.table.get_children()

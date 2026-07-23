@@ -29,7 +29,7 @@ class Application(TkinterDnD.Tk):
         screen_height = self.winfo_screenheight()
 
         window_width = 900
-        window_height = 1100
+        window_height = 900
 
         x = (screen_width - window_width) // 2
         y = (screen_height - window_height) // 2
@@ -51,7 +51,7 @@ class Application(TkinterDnD.Tk):
             ("Распаковка ZIP", ZipProcessorPage),
             ("Исправление MIF", MifProjectionPage),
             ("Работа с MDB", MdbCopyPage),
-            ("Split TZ", TzSplitterPage),
+            ("ТЗ по НП", TzSplitterPage),
             ("Анализ XML", XmlIndexCheckerPage),
             ("Справка", HelpPage)
         ]

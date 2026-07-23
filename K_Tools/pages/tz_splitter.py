@@ -230,7 +230,7 @@ class TzSplitterPage(BasePage):
         )
         frame_logs.pack(fill="both", expand=True, pady=10)
 
-        self.log_text = self.setup_log_area(height=8)
+        self.log_text = self.setup_log_area(height=8, parent=frame_logs)
         self.log_text.pack(fill="both", expand=True)
 
     def select_np_file(self):

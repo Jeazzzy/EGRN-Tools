@@ -70,7 +70,7 @@ class MdbCopyPage(BasePage):
     def build_ui(self):
         # Основной контейнер с центрированием
         main_container = tk.Frame(self, bg="#f5f5f5")
-        main_container.pack(fill="both", expand=True, padx=20, pady=10)
+        main_container.pack(fill="x", padx=20, pady=(10, 0))
 
         # Заголовок
         tk.Label(
