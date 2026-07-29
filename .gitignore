@@ -1,6 +1,16 @@
-/.venv
-/.idea
-/K_Tools/build
-/K_Tools/dist
-/K_Tools/build/K_Tools
-build/
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments and IDE settings
+/.venv/
+/.idea/
+
+# PyInstaller output
+/build/
+/dist/
+/K_Tools/build/
+/K_Tools/dist/
