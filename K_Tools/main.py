@@ -25,6 +25,7 @@ from pages import (
     HelpPage,
     MdbCopyPage,
     MifProjectionPage,
+    ReleaseCheckerPage,
     TzSplitterPage,
     XmlExtractorPage,
     XmlIndexCheckerPage,
@@ -148,6 +149,7 @@ class Application(QMainWindow):
             ("Работа с MDB", MdbCopyPage),
             ("Разделение ТЗ", TzSplitterPage),
             ("Анализ XML", XmlIndexCheckerPage),
+            ("Проверка выпуска", ReleaseCheckerPage),
         ]
         buttons = QButtonGroup(self)
         buttons.setExclusive(True)

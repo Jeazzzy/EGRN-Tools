@@ -29,7 +29,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='K_Tools 7.1.4',
+    name='K_Tools 7.1.5',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
