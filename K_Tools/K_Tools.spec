@@ -1,12 +1,19 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from PyInstaller.utils.hooks import collect_data_files
+
+
+pyogrio_datas = collect_data_files(
+    'pyogrio',
+    includes=['gdal_data/**', 'proj_data/**'],
+)
 
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[],
-    hiddenimports=[],
+    datas=pyogrio_datas,
+    hiddenimports=['pyogrio._geometry'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -22,7 +29,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='K_Tools',
+    name='K_Tools 7.1.4',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

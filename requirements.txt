@@ -1,5 +1,5 @@
 # GUI
-tkinterdnd2>=0.3.0
+PySide6>=6.8.0
 
 # Работа с MDB
 pyodbc>=5.1.0

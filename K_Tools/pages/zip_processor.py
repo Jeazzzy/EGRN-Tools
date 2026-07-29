@@ -1,293 +1,161 @@
 import os
-import zipfile
 import shutil
+import tempfile
 import xml.etree.ElementTree as ET
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
-from tkinterdnd2 import DND_FILES
-from core import BasePage
+import zipfile
+
+from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QLabel, QMessageBox, QPushButton
+
+from core import BasePage, DropZone, PathEdit
 
 
 class ZipProcessorPage(BasePage):
-    """Страница распаковки ZIP архивов"""
-
-    def __init__(self, parent, controller):
-        BasePage.__init__(self, parent, controller, bg="#f5f5f5")
-        self.source_dir_var = tk.StringVar()
-        self.target_dir_var = tk.StringVar()
-        self.stats_var = tk.StringVar()
-        self.build_ui()
-
-    def build_ui(self):
-        main_container = tk.Frame(self, bg="#f5f5f5")
-        main_container.pack(fill="both", expand=True)
-
-        content_frame = tk.Frame(main_container, bg="#f5f5f5")
-        content_frame.place(relx=0.5, rely=0.4, anchor="center")
-
-        tk.Label(
-            content_frame,
-            text="Распаковка ZIP архивов",
-            font=("ISOCPEUR", 20, "bold"),
-            bg="#f5f5f5",
-            fg="#2c3e50"
-        ).pack(pady=(0, 15))
-
-        # Исходная папка
-        tk.Label(
-            content_frame,
-            text="Исходная папка с ZIP:",
-            font=("ISOCPEUR", 14),
-            bg="#f5f5f5"
-        ).pack(anchor="w", pady=(0, 3))
-
-        frame_source = tk.Frame(content_frame, bg="#f5f5f5")
-        frame_source.pack(fill="x", pady=(0, 10))
-        tk.Entry(
-            frame_source,
-            textvariable=self.source_dir_var,
-            width=50,
-            font=("ISOCPEUR", 12)
-        ).pack(side=tk.LEFT, fill="x", expand=True, padx=(0, 10))
-        tk.Button(
-            frame_source,
-            text="Выбрать",
-            font=("ISOCPEUR", 12),
-            command=lambda: self.select_directory(self.source_dir_var)
-        ).pack(side=tk.LEFT)
-
-        # Целевая папка
-        tk.Label(
-            content_frame,
-            text="Целевая папка для результатов:",
-            font=("ISOCPEUR", 14),
-            bg="#f5f5f5"
-        ).pack(anchor="w", pady=(0, 3))
-
-        frame_target = tk.Frame(content_frame, bg="#f5f5f5")
-        frame_target.pack(fill="x", pady=(0, 15))
-        tk.Entry(
-            frame_target,
-            textvariable=self.target_dir_var,
-            width=50,
-            font=("ISOCPEUR", 12)
-        ).pack(side=tk.LEFT, fill="x", expand=True, padx=(0, 10))
-        tk.Button(
-            frame_target,
-            text="Выбрать",
-            font=("ISOCPEUR", 12),
-            command=lambda: self.select_directory(self.target_dir_var)
-        ).pack(side=tk.LEFT)
-
-        # Кнопка обработки
-        tk.Button(
-            content_frame,
-            text="▶ Распаковать и переименовать",
-            font=("ISOCPEUR", 16, 'bold'),
-            bg="#87CEEB",
-            fg="white",
-            padx=30,
-            pady=8,
-            command=self.process_zip_files
-        ).pack(pady=10)
-
-        # Прогресс-бар
-        self.progress_bar = self.setup_progress_bar(500)
-        self.progress_bar.pack(pady=5)
-
-        # Область Drag-and-Drop
-        self.zip_rename_label = tk.Label(
-            content_frame,
-            font=("ISOCPEUR", 14),
-            text="Перетащите ZIP/XML-файлы для переименования",
-            bg="#E0FFFF",
-            width=50,
-            height=4,
-            relief="ridge"
+    def __init__(self, controller=None, parent=None):
+        super().__init__(controller, parent)
+        root = self.page_layout(
+            "Распаковка ZIP-архивов",
+            "Извлекает XML/PDF и переименовывает результаты по кадастровому номеру.",
         )
-        self.zip_rename_label.pack(pady=10)
-        self.zip_rename_label.drop_target_register(DND_FILES)
-        self.zip_rename_label.dnd_bind('<<Drop>>', self.drop_zip_rename)
+        _, paths = self.card_layout(root, "Папки")
+        self.source_edit = self._path_row(paths, "Исходная папка с ZIP")
+        self.target_edit = self._path_row(paths, "Папка для результата")
+        self.run_btn = QPushButton("Распаковать и переименовать")
+        self.run_btn.setProperty("primary", True)
+        self.run_btn.clicked.connect(self.process_zip_files)
+        paths.addWidget(self.run_btn)
+        paths.addWidget(self.setup_progress_bar())
+        self.stats_label = QLabel("Готово к работе")
+        paths.addWidget(self.stats_label)
 
-        # Статистика
-        stats_label = tk.Label(
-            content_frame,
-            textvariable=self.stats_var,
-            font=("ISOCPEUR", 13),
-            justify="left",
-            bg="#f5f5f5",
-            fg="#555"
+        _, rename = self.card_layout(root, "Быстрое переименование")
+        zone = DropZone(
+            "Перетащите ZIP или XML — файлы будут переименованы на месте",
+            (".zip", ".xml"),
         )
-        stats_label.pack(pady=5)
+        zone.files_dropped.connect(self.rename_dropped)
+        rename.addWidget(zone)
+        self.rename_status = QLabel("")
+        self.rename_status.setWordWrap(True)
+        rename.addWidget(self.rename_status)
+        root.addStretch()
 
-    def select_directory(self, var):
-        directory = filedialog.askdirectory()
-        if directory:
-            var.set(directory)
+    def _path_row(self, layout, label):
+        layout.addWidget(QLabel(label))
+        row = QHBoxLayout()
+        edit = PathEdit()
+        button = QPushButton("Выбрать")
+        button.clicked.connect(lambda: self._choose_directory(edit))
+        row.addWidget(edit, 1)
+        row.addWidget(button)
+        layout.addLayout(row)
+        return edit
 
-    def create_output_dirs(self, target_dir):
-        zip_dir = os.path.join(target_dir, "ZIP")
-        xml_dir = os.path.join(target_dir, "XML")
-        pdf_dir = os.path.join(target_dir, "PDF")
-        os.makedirs(zip_dir, exist_ok=True)
-        os.makedirs(xml_dir, exist_ok=True)
-        os.makedirs(pdf_dir, exist_ok=True)
-        return zip_dir, xml_dir, pdf_dir
+    def _choose_directory(self, edit):
+        path = QFileDialog.getExistingDirectory(self, "Выберите папку")
+        if path:
+            edit.setText(path)
 
-    def get_cad_number_from_xml(self, xml_content):
+    @staticmethod
+    def get_cad_number_from_xml(content):
         try:
-            root = ET.fromstring(xml_content)
-            cad_text = None
-
-            if root.tag == "extract_cadastral_plan_territory":
-                cad_element = root.find(".//cadastral_block/cadastral_number")
-                if cad_element is not None and cad_element.text:
-                    cad_text = cad_element.text
-
-            if not cad_text:
-                common_data = root.find(".//common_data")
-                if common_data is not None:
-                    cad_element = common_data.find("cad_number")
-                    if cad_element is not None and cad_element.text:
-                        cad_text = cad_element.text
-
-            if cad_text:
-                return cad_text.strip().replace(":", "_")
-            return None
-        except ET.ParseError:
-            print("Ошибка: Не удалось распарсить XML.")
-            return None
-        except Exception as e:
-            print(f"Неизвестная ошибка при обработке XML: {e}")
+            root = ET.fromstring(content)
+            cad = None
+            if root.tag.split("}")[-1] == "extract_cadastral_plan_territory":
+                cad = root.find(".//cadastral_block/cadastral_number")
+            if cad is None or not cad.text:
+                common = root.find(".//common_data")
+                cad = common.find("cad_number") if common is not None else None
+            return cad.text.strip().replace(":", "_") if cad is not None and cad.text else None
+        except (ET.ParseError, AttributeError):
             return None
 
-    def rename_zip_by_cadastral(self, zip_path):
-        try:
-            with zipfile.ZipFile(zip_path, 'r') as zf:
-                xml_info = next(
-                    (info for info in zf.infolist() if info.filename.lower().endswith('.xml')), None
-                )
-                if not xml_info:
-                    return f"XML не найден: {os.path.basename(zip_path)}"
-                with zf.open(xml_info) as xml_file:
-                    xml_content = xml_file.read()
+    def _unique_path(self, folder, base, suffix):
+        path, number = os.path.join(folder, base + suffix), 1
+        while os.path.exists(path):
+            path = os.path.join(folder, f"{base}({number}){suffix}")
+            number += 1
+        return path
 
-            cad_number = self.get_cad_number_from_xml(xml_content)
-            if not cad_number:
-                return f"Кадастровый номер не найден: {os.path.basename(zip_path)}"
+    def _rename_one(self, path):
+        if path.lower().endswith(".zip"):
+            with zipfile.ZipFile(path) as archive:
+                info = next((i for i in archive.infolist() if i.filename.lower().endswith(".xml")), None)
+                if info is None:
+                    return f"XML не найден: {os.path.basename(path)}"
+                content = archive.read(info)
+            suffix = ".zip"
+        else:
+            with open(path, "rb") as source:
+                content = source.read()
+            suffix = ".xml"
+        cad = self.get_cad_number_from_xml(content)
+        if not cad:
+            return f"Кадастровый номер не найден: {os.path.basename(path)}"
+        new_path = self._unique_path(os.path.dirname(path), cad, suffix)
+        if os.path.abspath(new_path) != os.path.abspath(path):
+            os.rename(path, new_path)
+        return f"Переименован: {os.path.basename(new_path)}"
 
-            folder = os.path.dirname(zip_path)
-            base_name = cad_number
-            new_path = os.path.join(folder, f"{base_name}.zip")
-            i = 1
-            while os.path.exists(new_path):
-                new_path = os.path.join(folder, f"{base_name}({i}).zip")
-                i += 1
-
-            os.rename(zip_path, new_path)
-            return f"Переименован: {os.path.basename(new_path)}"
-        except Exception as e:
-            return f"Ошибка {os.path.basename(zip_path)}: {e}"
-
-    def rename_xml_by_cadastral(self, xml_path):
-        try:
-            with open(xml_path, "rb") as f:
-                xml_content = f.read()
-
-            cad_number = self.get_cad_number_from_xml(xml_content)
-            if not cad_number:
-                return f"Кадастровый номер не найден: {os.path.basename(xml_path)}"
-
-            folder = os.path.dirname(xml_path)
-            base_name = cad_number
-            new_path = os.path.join(folder, f"{base_name}.xml")
-            i = 1
-            while os.path.exists(new_path):
-                new_path = os.path.join(folder, f"{base_name}({i}).xml")
-                i += 1
-
-            os.rename(xml_path, new_path)
-            return f"XML переименован: {os.path.basename(new_path)}"
-        except Exception as e:
-            return f"Ошибка XML {os.path.basename(xml_path)}: {e}"
-
-    def drop_zip_rename(self, event):
-        files = self.master.tk.splitlist(event.data)
-        for file in files:
-            file = file.strip("{}")
-            if file.lower().endswith(".zip"):
-                result = self.rename_zip_by_cadastral(file)
-                print(result)
-            elif file.lower().endswith(".xml"):
-                result = self.rename_xml_by_cadastral(file)
-                print(result)
+    def rename_dropped(self, files):
+        messages = []
+        for path in files:
+            try:
+                messages.append(self._rename_one(path))
+            except Exception as error:
+                messages.append(f"Ошибка {os.path.basename(path)}: {error}")
+        self.rename_status.setText("\n".join(messages))
 
     def process_zip_files(self):
-        source_dir = self.source_dir_var.get().strip()
-        target_dir = self.target_dir_var.get().strip()
-
-        if not os.path.isdir(source_dir) or not os.path.isdir(target_dir):
-            messagebox.showerror("Ошибка", "Выберите корректные исходную и целевую папки!")
+        source, target = self.source_edit.text().strip(), self.target_edit.text().strip()
+        if not os.path.isdir(source) or not os.path.isdir(target):
+            QMessageBox.critical(self, "Ошибка", "Выберите корректные исходную и целевую папки.")
             return
-
-        zip_files = [f for f in os.listdir(source_dir) if f.lower().endswith(".zip")]
-        if not zip_files:
-            messagebox.showwarning("Нет файлов", f"В папке '{source_dir}' не найдено ZIP-файлов.")
-            return
-
-        zip_out_dir, xml_out_dir, pdf_out_dir = self.create_output_dirs(target_dir)
-        total_files = len(zip_files)
-        success_count = 0
-
-        self.update_progress(0, total_files)
-        self.stats_var.set("Начало обработки...")
-
-        temp_extract_dir = os.path.join(target_dir, "_temp_extract")
-
-        for index, filename in enumerate(zip_files, start=1):
-            full_zip_path = os.path.join(source_dir, filename)
-            cad_number = None
-
-            try:
-                with zipfile.ZipFile(full_zip_path, 'r') as zf:
-                    xml_info = next((info for info in zf.infolist()
-                                     if info.filename.lower().endswith('.xml')), None)
-                    if xml_info:
-                        with zf.open(xml_info) as xml_file:
-                            xml_content = xml_file.read()
-                        cad_number = self.get_cad_number_from_xml(xml_content)
-
-                    if cad_number:
-                        new_base_name = cad_number
-                        os.makedirs(temp_extract_dir, exist_ok=True)
-                        zf.extractall(temp_extract_dir)
-                        shutil.copy2(full_zip_path, os.path.join(zip_out_dir, f"{new_base_name}.zip"))
-
-                        for extracted_file in os.listdir(temp_extract_dir):
-                            src_path = os.path.join(temp_extract_dir, extracted_file)
-                            if extracted_file.lower().endswith(".xml"):
-                                shutil.move(src_path, os.path.join(xml_out_dir, f"{new_base_name}.xml"))
-                            elif extracted_file.lower().endswith(".pdf"):
-                                shutil.move(src_path, os.path.join(pdf_out_dir, f"{new_base_name}.pdf"))
-
-                        success_count += 1
-                    else:
-                        print(f"Пропуск {filename}: Кадастровый номер не найден.")
-
-            except Exception as e:
-                print(f"Ошибка при обработке {filename}: {e}")
-            finally:
-                if os.path.exists(temp_extract_dir):
-                    shutil.rmtree(temp_extract_dir)
-
-            self.update_progress(index)
-            self.stats_var.set(f"Обработка: {index}/{total_files} ({filename}). Успешно: {success_count}")
-            self.update_idletasks()
-
-        self.stats_var.set(
-            f"Обработка завершена!\n"
-            f"Всего ZIP: {total_files}\n"
-            f"Успешно обработано: {success_count}\n"
+        self.run_btn.setEnabled(False)
+        self.start_task(
+            self._process,
+            source,
+            target,
+            on_result=self._done,
+            on_error=lambda text: QMessageBox.critical(self, "Ошибка", text.splitlines()[-1]),
+            on_finished=lambda: self.run_btn.setEnabled(True),
         )
-        self.update_progress(0)
-        messagebox.showinfo("Готово", "Обработка ZIP-архивов завершена.")
+
+    def _process(self, signals, source, target):
+        files = [name for name in os.listdir(source) if name.lower().endswith(".zip")]
+        if not files:
+            raise ValueError("В исходной папке нет ZIP-файлов")
+        out = {ext: os.path.join(target, ext) for ext in ("ZIP", "XML", "PDF")}
+        for folder in out.values():
+            os.makedirs(folder, exist_ok=True)
+        success = 0
+        for index, name in enumerate(files, 1):
+            try:
+                path = os.path.join(source, name)
+                with zipfile.ZipFile(path) as archive:
+                    info = next((i for i in archive.infolist() if i.filename.lower().endswith(".xml")), None)
+                    cad = self.get_cad_number_from_xml(archive.read(info)) if info else None
+                    if not cad:
+                        signals.message.emit(f"Пропуск {name}: номер не найден")
+                        continue
+                    shutil.copy2(path, self._unique_path(out["ZIP"], cad, ".zip"))
+                    with tempfile.TemporaryDirectory(dir=target) as temp:
+                        archive.extractall(temp)
+                        for root, _, names in os.walk(temp):
+                            for extracted in names:
+                                ext = os.path.splitext(extracted)[1].upper().lstrip(".")
+                                if ext in ("XML", "PDF"):
+                                    shutil.copy2(
+                                        os.path.join(root, extracted),
+                                        self._unique_path(out[ext], cad, "." + ext.lower()),
+                                    )
+                    success += 1
+            except Exception as error:
+                signals.message.emit(f"Ошибка {name}: {error}")
+            finally:
+                signals.progress.emit(index, len(files))
+        return len(files), success
+
+    def _done(self, result):
+        total, success = result
+        self.stats_label.setText(f"Всего ZIP: {total} · Успешно: {success}")
+        QMessageBox.information(self, "Готово", "Обработка ZIP-архивов завершена.")

@@ -54,7 +54,7 @@
 
 ## 🖥 Интерфейс
 
-- Графический интерфейс (Tkinter)
+- Современный графический интерфейс (PySide6 / Qt 6)
 - Drag & Drop для ZIP и MIF
 - Прогресс-бары
 - Разделение функционала по вкладкам
@@ -79,7 +79,8 @@ Python для этого варианта **не требуется**.
 
 ```bash
 pip install pyinstaller
-python -m PyInstaller EGRN_Tools.spec
+cd K_Tools
+python -m PyInstaller K_Tools.spec
 ```
 
 Готовый файл появится в каталоге:
@@ -96,7 +97,9 @@ dist/EGRN_Tools/
 EGRN-Tools/
 │
 ├── EGRN_Tools.py      # Основной файл приложения
-├── EGRN_Tools.spec   # Конфигурация PyInstaller
+├── K_Tools/
+│   ├── main.py       # Точка входа PySide6
+│   └── K_Tools.spec  # Конфигурация PyInstaller
 ├── README.md
 └── icon.ico
 ```
