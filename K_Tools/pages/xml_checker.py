@@ -2,7 +2,6 @@ import os
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -20,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from core import BasePage, CopyTableWidget, DataProcessor, PathEdit
+from theme import set_semantic_background
 
 
 class DetailWindow(QDialog):
@@ -162,7 +162,7 @@ class XmlIndexCheckerPage(BasePage):
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 if len(districts) != 1:
-                    item.setBackground(QColor("#fff3cd"))
+                    set_semantic_background(item, "warning")
                 self.table.setItem(row, column, item)
         self.table.setSortingEnabled(True)
         self.status_label.setText(

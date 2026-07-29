@@ -59,9 +59,7 @@ class MdbCopyPage(BasePage):
         )
         if not PYODBC_AVAILABLE:
             warning = QLabel("pyodbc не установлен. Добавьте зависимость перед работой с MDB.")
-            warning.setStyleSheet(
-                "background:#fff3cd;color:#856404;padding:12px;border-radius:8px;"
-            )
+            warning.setObjectName("warningBanner")
             root.addWidget(warning)
 
         self.tabs = QTabWidget()
