@@ -92,6 +92,25 @@ class InspectPdfTests(unittest.TestCase):
             self.assertEqual(result.area, "527210")
             self.assertEqual(result.status, STATUS_FOUND)
 
+    def test_uses_file_name_for_np_pdf_at_pdf_root(self):
+        with TemporaryDirectory() as temporary:
+            pdf_root = Path(temporary) / "pdf"
+            pdf_root.mkdir()
+            pdf_path = pdf_root / "р.п. Приволжский.pdf"
+            pdf_path.touch()
+
+            result = inspect_pdf(
+                pdf_path,
+                pdf_root,
+                lambda _: (
+                    "Площадь объекта ± величина погрешности определения площади "
+                    "(P ± ΔP), м² 17562237 ± 100"
+                ),
+            )
+
+            self.assertEqual(result.settlement, "р.п. Приволжский")
+            self.assertEqual(result.status, STATUS_FOUND)
+
     def test_marks_empty_text(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -120,7 +139,11 @@ class InspectPdfTests(unittest.TestCase):
             self.assertEqual(result.status, STATUS_MULTIPLE)
 
     def test_pdf_reader_extracts_text_stream(self):
-        from core.release_checker import _read_pdf_text
+        from core.release_checker import (
+            _read_pdf_content,
+            _read_pdf_text,
+            inspect_pdf_page_count,
+        )
 
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -162,6 +185,12 @@ class InspectPdfTests(unittest.TestCase):
             path.write_bytes(document)
 
             self.assertIn("Release PDF text", _read_pdf_text(path))
+            text, page_count = _read_pdf_content(path)
+            self.assertIn("Release PDF text", text)
+            self.assertEqual(page_count, 1)
+            result = inspect_pdf_page_count(path, root)
+            self.assertEqual(result.page_count, 1)
+            self.assertEqual(result.status, STATUS_FOUND)
 
 
 if __name__ == "__main__":

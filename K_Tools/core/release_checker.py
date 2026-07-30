@@ -42,6 +42,7 @@ class PdfAreaResult:
     relative_path: str
     full_path: str
     area: str
+    page_count: int
     status: str
     details: str = ""
 
@@ -121,7 +122,7 @@ def find_pdf_files(pdf_folder: str | Path) -> list[Path]:
     )
 
 
-def _read_pdf_text(path: Path) -> str:
+def _read_pdf_content(path: Path) -> tuple[str, int]:
     try:
         from pypdf import PdfReader
     except ImportError as error:
@@ -136,7 +137,62 @@ def _read_pdf_text(path: Path) -> str:
     pages: list[str] = []
     for page in reader.pages:
         pages.append(page.extract_text() or "")
-    return "\n".join(pages)
+    return "\n".join(pages), len(reader.pages)
+
+
+def _read_pdf_text(path: Path) -> str:
+    """Совместимый помощник для мест, которым нужен только текст PDF."""
+
+    return _read_pdf_content(path)[0]
+
+
+def inspect_pdf_page_count(
+    path: str | Path,
+    pdf_folder: str | Path,
+) -> PdfAreaResult:
+    """Быстро читает только количество страниц для построения оглавления."""
+
+    pdf_path = Path(path)
+    root = Path(pdf_folder)
+    try:
+        relative = pdf_path.relative_to(root)
+    except ValueError:
+        relative = Path(pdf_path.name)
+    settlement = (
+        pdf_path.stem
+        if pdf_path.parent.resolve() == root.resolve()
+        else pdf_path.parent.name
+    )
+    common = {
+        "settlement": settlement,
+        "file_name": pdf_path.name,
+        "relative_path": str(relative),
+        "full_path": str(pdf_path),
+        "area": "",
+    }
+    try:
+        try:
+            from pypdf import PdfReader
+        except ImportError as error:
+            raise RuntimeError(
+                "Не установлен модуль pypdf. Установите зависимости "
+                "из requirements.txt."
+            ) from error
+        reader = PdfReader(str(pdf_path), strict=False)
+        if reader.is_encrypted and not reader.decrypt(""):
+            raise ValueError("PDF защищён паролем.")
+        return PdfAreaResult(
+            **common,
+            page_count=len(reader.pages),
+            status=STATUS_FOUND,
+        )
+    except Exception as error:
+        return PdfAreaResult(
+            **common,
+            page_count=0,
+            status=STATUS_ERROR,
+            details=str(error) or error.__class__.__name__,
+        )
 
 
 def inspect_pdf(
@@ -153,7 +209,14 @@ def inspect_pdf(
     except ValueError:
         relative = Path(pdf_path.name)
 
-    settlement = pdf_path.parent.name
+    # В выпусках НП PDF обычно лежат непосредственно в папке ``pdf`` и
+    # называются по населённым пунктам. В структуре ТЗ название НП задаётся
+    # родительской папкой.
+    settlement = (
+        pdf_path.stem
+        if pdf_path.parent.resolve() == root.resolve()
+        else pdf_path.parent.name
+    )
     common = {
         "settlement": settlement,
         "file_name": pdf_path.name,
@@ -162,11 +225,16 @@ def inspect_pdf(
     }
 
     try:
-        text = (text_reader or _read_pdf_text)(pdf_path)
+        if text_reader is None:
+            text, page_count = _read_pdf_content(pdf_path)
+        else:
+            text = text_reader(pdf_path)
+            page_count = 0
         if not text.strip():
             return PdfAreaResult(
                 **common,
                 area="",
+                page_count=page_count,
                 status=STATUS_NOT_FOUND,
                 details="В PDF нет извлекаемого текста. Возможно, это скан.",
             )
@@ -176,18 +244,21 @@ def inspect_pdf(
             return PdfAreaResult(
                 **common,
                 area=values[0],
+                page_count=page_count,
                 status=STATUS_FOUND,
             )
         if len(values) > 1:
             return PdfAreaResult(
                 **common,
                 area=", ".join(values),
+                page_count=page_count,
                 status=STATUS_MULTIPLE,
                 details="В документе найдены разные значения площади.",
             )
         return PdfAreaResult(
             **common,
             area="",
+            page_count=page_count,
             status=STATUS_NOT_FOUND,
             details="Строка «Площадь объекта …, м²» не найдена.",
         )
@@ -195,6 +266,7 @@ def inspect_pdf(
         return PdfAreaResult(
             **common,
             area="",
+            page_count=0,
             status=STATUS_ERROR,
             details=str(error) or error.__class__.__name__,
         )

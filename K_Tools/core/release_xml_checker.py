@@ -15,8 +15,29 @@ STATUS_VALID = "Корректно"
 STATUS_INVALID = "Есть ошибки"
 STATUS_READ_ERROR = "Ошибка чтения"
 
-METHOD_AT_LIMIT = "692003000000"
-METHOD_BELOW_LIMIT = "692006000000"
+RELEASE_MODE_TZ = "tz"
+RELEASE_MODE_NP = "np"
+
+METHOD_CARTOMETRIC = "692003000000"
+METHOD_ANALYTICAL = "692006000000"
+
+# Классификатор методов определения координат характерных точек.
+VALID_METHODS = {
+    "692001000000",  # Геодезический метод
+    "692002000000",  # Фотограмметрический метод
+    METHOD_CARTOMETRIC,
+    "692004000000",  # Иное описание
+    "692005000000",  # Метод спутниковых геодезических измерений
+    METHOD_ANALYTICAL,
+}
+
+# Для цифровых планшетов 1:2000 и 1:10000 погрешность картометрического
+# метода составляет соответственно 1 и 5 метров.
+MIXED_TABLET_ACCURACIES = {Decimal("1"), Decimal("5")}
+
+# Обратная совместимость для внешних импортов и старых тестов.
+METHOD_AT_LIMIT = METHOD_CARTOMETRIC
+METHOD_BELOW_LIMIT = METHOD_ANALYTICAL
 
 
 @dataclass(frozen=True)
@@ -31,6 +52,8 @@ class XmlReleaseResult:
     cadastral_district: str
     index: str
     locality: str
+    boundary_type: str
+    registry_number: str
     point_count: int
     polygon_count: int
     checked_accuracy_points: int
@@ -102,6 +125,26 @@ def _as_decimal(value: str) -> Decimal:
         return Decimal(normalised)
     except InvalidOperation as error:
         raise ValueError(f"некорректное значение «{value}»") from error
+
+
+def _normalise_release_mode(release_mode: str) -> str:
+    mode = str(release_mode).strip().casefold()
+    if mode not in {RELEASE_MODE_TZ, RELEASE_MODE_NP}:
+        raise ValueError(f"Неизвестный режим выпуска «{release_mode}».")
+    return mode
+
+
+def _settlement_name(value: str) -> str:
+    """Убирает распространённое обозначение вида НП перед его названием."""
+
+    cleaned = _clean_text(value).casefold().replace("ё", "е")
+    cleaned = re.sub(
+        r"^(?:(?:р\s*\.?\s*п)|г|п|с|д|пос|поселок|город|село|деревня)"
+        r"\.?\s+",
+        "",
+        cleaned,
+    )
+    return cleaned.strip(" .«»\"'")
 
 
 def locate_xml_folder(selected_folder: str | Path) -> Path:
@@ -209,6 +252,7 @@ def _validate_accuracy(
     root: ElementTree.Element,
     accuracy_limit: Decimal,
     namespace_uri: str | None = None,
+    mixed_tablet_accuracy: bool = False,
 ) -> tuple[int, list[str]]:
     records = _accuracy_records(root, namespace_uri)
     issues: list[str] = []
@@ -244,21 +288,41 @@ def _validate_accuracy(
                 f"{prefix}: delta_geopoint {delta} м больше заданной "
                 f"точности {accuracy_limit} м."
             )
-        else:
-            expected = METHOD_AT_LIMIT if delta == accuracy_limit else METHOD_BELOW_LIMIT
-            if method != expected:
-                relation = "равна" if delta == accuracy_limit else "меньше"
+        elif method not in VALID_METHODS:
+            issues.append(
+                f"{prefix}: неизвестный код geopoint_opred {method}."
+            )
+        elif method == METHOD_CARTOMETRIC:
+            if mixed_tablet_accuracy and delta not in MIXED_TABLET_ACCURACIES:
                 issues.append(
-                    f"{prefix}: при delta_geopoint {delta} м ({relation} заданной) "
-                    f"geopoint_opred должен быть {expected}, получено {method}."
+                    f"{prefix}: при совместном применении планшетов 1:2000 "
+                    f"и 1:10000 картометрическая погрешность должна быть "
+                    f"1 или 5 м, получено {delta} м."
+                )
+            elif not mixed_tablet_accuracy and delta != accuracy_limit:
+                issues.append(
+                    f"{prefix}: для картометрического метода ожидается "
+                    f"delta_geopoint {accuracy_limit} м, получено {delta} м. "
+                    f"Выберите точность используемого планшета или включите "
+                    f"режим смешанных планшетов 1:2000 + 1:10000."
                 )
     return len(records), issues
 
 
-def _archive_context(archive_path: Path) -> dict[str, str]:
+def _archive_context(
+    archive_path: Path,
+    release_mode: str = RELEASE_MODE_TZ,
+) -> dict[str, str]:
+    mode = _normalise_release_mode(release_mode)
+    if mode == RELEASE_MODE_NP:
+        settlement_folder = archive_path.parent.name
+        zone_folder = ""
+    else:
+        settlement_folder = archive_path.parent.parent.name
+        zone_folder = archive_path.parent.name
     return {
-        "settlement_folder": archive_path.parent.parent.name,
-        "zone_folder": archive_path.parent.name,
+        "settlement_folder": settlement_folder,
+        "zone_folder": zone_folder,
         "archive_name": archive_path.name,
         "full_path": str(archive_path),
     }
@@ -268,14 +332,17 @@ def _error_result(
     archive_path: Path,
     message: str,
     xml_name: str = "",
+    release_mode: str = RELEASE_MODE_TZ,
 ) -> XmlReleaseResult:
     return XmlReleaseResult(
-        **_archive_context(archive_path),
+        **_archive_context(archive_path, release_mode),
         xml_name=xml_name,
         object_name="",
         cadastral_district="",
         index="",
         locality="",
+        boundary_type="",
+        registry_number="",
         point_count=0,
         polygon_count=0,
         checked_accuracy_points=0,
@@ -291,10 +358,14 @@ def parse_xml_release(
     archive_path: str | Path,
     xml_name: str,
     accuracy_limit: Decimal | str,
+    mixed_tablet_accuracy: bool = False,
+    release_mode: str = RELEASE_MODE_TZ,
 ) -> XmlReleaseResult:
     """Извлекает требуемые поля и проверяет один XML-документ."""
 
     archive = Path(archive_path)
+    mode = _normalise_release_mode(release_mode)
+    archive_context = _archive_context(archive, mode)
     limit = (
         accuracy_limit
         if isinstance(accuracy_limit, Decimal)
@@ -310,9 +381,15 @@ def parse_xml_release(
     object_name = _first_text(root, "name_object", ibnd_namespace)
     cadastral_district = _first_text(root, "cadastral_district", ibnd_namespace)
     index = _first_text(root, "index", ibnd_namespace)
-    locality = (
-        _first_text(root, "name_locality", address_namespace) or "Вне НП"
-    )
+    locality = _first_text(root, "name_locality", address_namespace)
+    boundary_type = _first_text(root, "type_boundary", ibnd_namespace)
+    registry_number = _first_text(root, "reg_numb_border", ibnd_namespace)
+    if not locality:
+        locality = (
+            archive_context["settlement_folder"]
+            if mode == RELEASE_MODE_NP
+            else "Вне НП"
+        )
     polygon_counts = _polygon_point_counts(root, spatial_namespace)
     polygon_count = len(polygon_counts)
     # Первый и последний geopoint каждого контура описывают одну и ту же
@@ -322,6 +399,7 @@ def parse_xml_release(
         root,
         limit,
         spatial_namespace,
+        mixed_tablet_accuracy,
     )
 
     issues: list[str] = []
@@ -329,13 +407,29 @@ def parse_xml_release(
         issues.append("Не найден name_object.")
     if not cadastral_district:
         issues.append("Не найден cadastral_district.")
-    if not index:
-        issues.append("Не найден index.")
-    elif index.strip().casefold() != archive.parent.name.strip().casefold():
-        issues.append(
-            f"Индекс XML «{index}» не совпадает с папкой зоны "
-            f"«{archive.parent.name}»."
-        )
+    if mode == RELEASE_MODE_TZ:
+        if not index:
+            issues.append("Не найден index.")
+        elif index.strip().casefold() != archive.parent.name.strip().casefold():
+            issues.append(
+                f"Индекс XML «{index}» не совпадает с папкой зоны "
+                f"«{archive.parent.name}»."
+            )
+    else:
+        if boundary_type != "4":
+            issues.append(
+                f"Для границы населённого пункта type_boundary должен быть 4, "
+                f"получено «{boundary_type or 'не указано'}»."
+            )
+        if not registry_number:
+            issues.append("Не найден reg_numb_border.")
+        folder_name = _settlement_name(archive_context["settlement_folder"])
+        object_text = f"{object_name} {locality}".casefold().replace("ё", "е")
+        if folder_name and folder_name not in object_text:
+            issues.append(
+                f"Название папки НП «{archive_context['settlement_folder']}» "
+                f"не найдено в сведениях XML."
+            )
     if not polygon_counts:
         issues.append("Не найдены точки пространственного описания.")
     issues.extend(accuracy_issues)
@@ -347,12 +441,14 @@ def parse_xml_release(
         else f"Ошибок: {accuracy_error_count} из {checked_points}"
     )
     return XmlReleaseResult(
-        **_archive_context(archive),
+        **archive_context,
         xml_name=xml_name,
         object_name=object_name,
         cadastral_district=cadastral_district,
         index=index,
         locality=locality,
+        boundary_type=boundary_type,
+        registry_number=registry_number,
         point_count=point_count,
         polygon_count=polygon_count,
         checked_accuracy_points=checked_points,
@@ -366,10 +462,13 @@ def parse_xml_release(
 def inspect_xml_archive(
     archive_path: str | Path,
     accuracy_limit: Decimal | str,
+    mixed_tablet_accuracy: bool = False,
+    release_mode: str = RELEASE_MODE_TZ,
 ) -> list[XmlReleaseResult]:
     """Проверяет все XML-файлы внутри одного ZIP без распаковки на диск."""
 
     archive = Path(archive_path)
+    mode = _normalise_release_mode(release_mode)
     try:
         with ZipFile(archive) as zip_file:
             xml_members = sorted(
@@ -382,7 +481,13 @@ def inspect_xml_archive(
                 key=lambda member: member.filename.casefold(),
             )
             if not xml_members:
-                return [_error_result(archive, "В ZIP-архиве не найден XML-файл.")]
+                return [
+                    _error_result(
+                        archive,
+                        "В ZIP-архиве не найден XML-файл.",
+                        release_mode=mode,
+                    )
+                ]
 
             results = []
             for member in xml_members:
@@ -394,6 +499,8 @@ def inspect_xml_archive(
                             archive,
                             xml_name,
                             accuracy_limit,
+                            mixed_tablet_accuracy,
+                            mode,
                         )
                     )
                 except Exception as error:
@@ -402,8 +509,15 @@ def inspect_xml_archive(
                             archive,
                             str(error) or error.__class__.__name__,
                             xml_name,
+                            mode,
                         )
                     )
             return results
     except (BadZipFile, OSError, RuntimeError) as error:
-        return [_error_result(archive, str(error) or error.__class__.__name__)]
+        return [
+            _error_result(
+                archive,
+                str(error) or error.__class__.__name__,
+                release_mode=mode,
+            )
+        ]

@@ -16,6 +16,7 @@ def pdf_result():
         relative_path=r"п. Виноградный\description.pdf",
         full_path=r"C:\release\pdf\п. Виноградный\description.pdf",
         area="527210",
+        page_count=12,
         status=STATUS_FOUND,
         details="",
     )
@@ -31,6 +32,8 @@ def xml_result(object_name="Территориальная зона ВИ1"):
         cadastral_district="23",
         index="ВИ1",
         locality="Вне НП",
+        boundary_type="",
+        registry_number="",
         point_count=7,
         polygon_count=2,
         checked_accuracy_points=9,
@@ -58,14 +61,15 @@ class ReleaseXlsxExporterTests(unittest.TestCase):
             pdf_sheet = workbook["PDF"]
             self.assertEqual(pdf_sheet["A1"].value, "Населённый пункт")
             self.assertEqual(pdf_sheet["C2"].value, 527210)
+            self.assertEqual(pdf_sheet["D2"].value, 12)
             self.assertEqual(pdf_sheet.freeze_panes, "A2")
             self.assertTrue(pdf_sheet.auto_filter.ref)
 
             xml_sheet = workbook["XML"]
             self.assertEqual(xml_sheet["E2"].value, "Территориальная зона ВИ1")
-            self.assertEqual(xml_sheet["I2"].value, 7)
-            self.assertEqual(xml_sheet["J2"].value, 2)
-            self.assertEqual(xml_sheet["N2"].value, STATUS_VALID)
+            self.assertEqual(xml_sheet["K2"].value, 7)
+            self.assertEqual(xml_sheet["L2"].value, 2)
+            self.assertEqual(xml_sheet["P2"].value, STATUS_VALID)
 
     def test_exports_only_available_result_type(self):
         with TemporaryDirectory() as temporary:

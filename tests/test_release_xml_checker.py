@@ -6,6 +6,8 @@ from zipfile import ZipFile
 from core.release_xml_checker import (
     METHOD_AT_LIMIT,
     METHOD_BELOW_LIMIT,
+    METHOD_CARTOMETRIC,
+    RELEASE_MODE_NP,
     STATUS_INVALID,
     STATUS_READ_ERROR,
     STATUS_VALID,
@@ -68,8 +70,48 @@ def make_xml(index="ВИ1", locality=None, point_values=None):
     """.encode("utf-8")
 
 
+def make_np_xml(
+    name="Граница населенного пункта – поселок Геофизик",
+    locality="Геофизик",
+    boundary_type="4",
+    registry_number="64:38-4.36",
+    point_values=None,
+):
+    values = point_values or [
+        (str(index), "1", METHOD_CARTOMETRIC)
+        for index in range(1, 6)
+    ]
+    points = "".join(_point(*value) for value in values)
+    locality_tag = (
+        f"<AdrCi:name_locality>{locality}</AdrCi:name_locality>"
+        if locality is not None
+        else ""
+    )
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+    <Root
+        xmlns:iBND="urn:test:interact-boundaries"
+        xmlns:AdrCi="urn:test:address"
+        xmlns:EnSpa="urn:test:spatial">
+      <iBND:name_object>{name}</iBND:name_object>
+      <iBND:cadastral_district>64:38</iBND:cadastral_district>
+      <iBND:type_boundary>{boundary_type}</iBND:type_boundary>
+      <iBND:reg_numb_border>{registry_number}</iBND:reg_numb_border>
+      {locality_tag}
+      <EnSpa:spatial_data>
+        <EnSpa:spatial_element>
+          <EnSpa:ordinates>{points}</EnSpa:ordinates>
+        </EnSpa:spatial_element>
+      </EnSpa:spatial_data>
+    </Root>
+    """.encode("utf-8")
+
+
 def archive_path(root, zone="ВИ1"):
     return root / "xml" / "Вне НП" / zone / "boundaries.zip"
+
+
+def np_archive_path(root, settlement="п. Геофизик"):
+    return root / "xml" / settlement / "boundaries.zip"
 
 
 class ParseXmlReleaseTests(unittest.TestCase):
@@ -153,7 +195,7 @@ class ParseXmlReleaseTests(unittest.TestCase):
             self.assertEqual(result.status, STATUS_INVALID)
             self.assertIn("больше заданной точности", result.details)
 
-    def test_checks_method_codes_for_equal_and_better_accuracy(self):
+    def test_method_code_does_not_depend_on_better_accuracy(self):
         values = [
             ("1", "0.1", METHOD_BELOW_LIMIT),
             ("2", "0.05", METHOD_AT_LIMIT),
@@ -173,9 +215,126 @@ class ParseXmlReleaseTests(unittest.TestCase):
                 "0.1",
             )
 
-            self.assertEqual(result.accuracy_error_count, 2)
-            self.assertIn(METHOD_AT_LIMIT, result.details)
-            self.assertIn(METHOD_BELOW_LIMIT, result.details)
+            self.assertEqual(result.accuracy_error_count, 1)
+            self.assertIn("для картометрического метода", result.details)
+            self.assertNotIn("должен быть 692006000000", result.details)
+
+    def test_accepts_mixed_2000_and_10000_tablet_accuracy(self):
+        values = [
+            (str(index), "1" if index % 2 else "5", METHOD_CARTOMETRIC)
+            for index in range(1, 10)
+        ]
+        with TemporaryDirectory() as temporary:
+            result = parse_xml_release(
+                make_xml(point_values=values),
+                archive_path(Path(temporary)),
+                "boundaries.xml",
+                "5",
+                mixed_tablet_accuracy=True,
+            )
+
+            self.assertEqual(result.accuracy_error_count, 0)
+            self.assertEqual(result.status, STATUS_VALID)
+
+    def test_mixed_tablet_mode_rejects_other_cartometric_accuracy(self):
+        values = [
+            (str(index), "2.5", METHOD_CARTOMETRIC)
+            for index in range(1, 10)
+        ]
+        with TemporaryDirectory() as temporary:
+            result = parse_xml_release(
+                make_xml(point_values=values),
+                archive_path(Path(temporary)),
+                "boundaries.xml",
+                "5",
+                mixed_tablet_accuracy=True,
+            )
+
+            self.assertEqual(result.accuracy_error_count, 9)
+            self.assertIn("должна быть 1 или 5 м", result.details)
+
+    def test_rejects_unknown_coordinate_method(self):
+        values = [
+            (str(index), "0.1", "692999000000")
+            for index in range(1, 10)
+        ]
+        with TemporaryDirectory() as temporary:
+            result = parse_xml_release(
+                make_xml(point_values=values),
+                archive_path(Path(temporary)),
+                "boundaries.xml",
+                "0.1",
+            )
+
+            self.assertEqual(result.accuracy_error_count, 9)
+            self.assertIn("неизвестный код geopoint_opred", result.details)
+
+    def test_np_mode_accepts_release_without_zone_index(self):
+        with TemporaryDirectory() as temporary:
+            result = parse_xml_release(
+                make_np_xml(),
+                np_archive_path(Path(temporary)),
+                "boundaries.xml",
+                "1",
+                release_mode=RELEASE_MODE_NP,
+            )
+
+            self.assertEqual(result.settlement_folder, "п. Геофизик")
+            self.assertEqual(result.zone_folder, "")
+            self.assertEqual(result.index, "")
+            self.assertEqual(result.locality, "Геофизик")
+            self.assertEqual(result.boundary_type, "4")
+            self.assertEqual(result.registry_number, "64:38-4.36")
+            self.assertEqual(result.status, STATUS_VALID)
+
+    def test_np_mode_uses_folder_when_locality_is_absent(self):
+        with TemporaryDirectory() as temporary:
+            result = parse_xml_release(
+                make_np_xml(locality=None),
+                np_archive_path(Path(temporary)),
+                "boundaries.xml",
+                "1",
+                release_mode=RELEASE_MODE_NP,
+            )
+
+            self.assertEqual(result.locality, "п. Геофизик")
+            self.assertEqual(result.status, STATUS_VALID)
+
+    def test_np_mode_matches_spaced_working_settlement_abbreviation(self):
+        with TemporaryDirectory() as temporary:
+            result = parse_xml_release(
+                make_np_xml(
+                    name="Граница населенного пункта – рабочий поселок Приволжский",
+                    locality="Приволжский",
+                    registry_number="64:50-4.203",
+                ),
+                np_archive_path(Path(temporary), "р. п. Приволжский"),
+                "boundaries.xml",
+                "1",
+                release_mode=RELEASE_MODE_NP,
+            )
+
+            self.assertEqual(result.status, STATUS_VALID)
+
+    def test_np_mode_checks_boundary_type_registry_number_and_folder(self):
+        with TemporaryDirectory() as temporary:
+            result = parse_xml_release(
+                make_np_xml(
+                    name="Граница населенного пункта – поселок Другой",
+                    locality="Другой",
+                    boundary_type="2",
+                    registry_number="",
+                ),
+                np_archive_path(Path(temporary)),
+                "boundaries.xml",
+                "1",
+                release_mode=RELEASE_MODE_NP,
+            )
+
+            self.assertEqual(result.status, STATUS_INVALID)
+            self.assertIn("type_boundary должен быть 4", result.details)
+            self.assertIn("Не найден reg_numb_border", result.details)
+            self.assertIn("Название папки НП", result.details)
 
     def test_reports_missing_accuracy_tags_on_a_point(self):
         xml_data = make_xml().replace(
@@ -234,6 +393,24 @@ class XmlArchiveTests(unittest.TestCase):
 
             self.assertEqual(result.status, STATUS_READ_ERROR)
             self.assertIn("не найден XML", result.details)
+
+    def test_reads_np_archive_with_settlement_folder_structure(self):
+        with TemporaryDirectory() as temporary:
+            path = np_archive_path(Path(temporary))
+            path.parent.mkdir(parents=True)
+            with ZipFile(path, "w") as zip_file:
+                zip_file.writestr("nested/boundaries.xml", make_np_xml())
+
+            result = inspect_xml_archive(
+                path,
+                "1",
+                release_mode=RELEASE_MODE_NP,
+            )[0]
+
+            self.assertEqual(result.status, STATUS_VALID)
+            self.assertEqual(result.settlement_folder, "п. Геофизик")
+            self.assertEqual(result.zone_folder, "")
+            self.assertEqual(result.registry_number, "64:38-4.36")
 
     def test_marks_malformed_xml(self):
         with TemporaryDirectory() as temporary:
