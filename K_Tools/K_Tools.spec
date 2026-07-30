@@ -1,11 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 from pathlib import Path
+import runpy
 
 from PyInstaller.utils.hooks import collect_all, collect_delvewheel_libs_directory
 
 
 app_dir = Path(SPECPATH)
+version_info = runpy.run_path(str(app_dir / "version.py"))
+executable_name = version_info["EXECUTABLE_BASENAME"]
 
 # pyogrio contains Cython extensions whose dependencies are invisible to
 # PyInstaller's static analysis (most importantly _io -> _geometry). Collect
@@ -44,7 +47,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='K_Tools',
+    name=executable_name,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

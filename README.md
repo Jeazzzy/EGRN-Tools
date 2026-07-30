@@ -126,12 +126,25 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 
 ```text
 dist/
-├── K_Tools.exe
-└── K_Tools.exe.sha256
+├── K_Tools 7.2.1 stable.exe
+└── K_Tools 7.2.1 stable.exe.sha256
 ```
 
 Предыдущий рабочий EXE сохраняется, если сборка или самопроверка завершилась
 ошибкой.
+
+### Изменение версии
+
+Номер версии и канал выпуска задаются в `K_Tools/version.py`:
+
+```python
+APP_VERSION = "7.2.1"
+RELEASE_CHANNEL = "stable"
+```
+
+Это единый источник версии для заголовка и боковой панели приложения, свойства
+Qt `applicationVersion`, имени EXE и файла контрольной суммы. Для следующего
+выпуска достаточно изменить эти две константы и запустить `build.ps1`.
 
 ## Тесты
 
@@ -153,7 +166,8 @@ K_Tools/
 │   ├── build_self_test.py    # GIS-самопроверка сборки
 │   ├── K_Tools.spec          # конфигурация PyInstaller
 │   ├── main.py               # точка входа
-│   └── theme.py              # светлая и тёмная темы
+│   ├── theme.py              # светлая и тёмная темы
+│   └── version.py            # версия приложения и имя EXE
 ├── tests/                    # автоматические тесты
 ├── build.ps1                 # воспроизводимая сборка Windows EXE
 ├── requirements.txt          # зависимости для разработки и запуска

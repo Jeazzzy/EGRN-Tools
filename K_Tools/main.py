@@ -40,6 +40,7 @@ from pages import (
     ZipProcessorPage,
 )
 from theme import Theme, ThemeManager
+from version import APP_VERSION, DISPLAY_VERSION
 
 
 def resource_path(name: str) -> str:
@@ -51,7 +52,9 @@ class Application(QMainWindow):
     def __init__(self, theme_manager: ThemeManager):
         super().__init__()
         self.theme_manager = theme_manager
-        self.setWindowTitle("K Tools — Кадастровые инструменты")
+        self.setWindowTitle(
+            f"K Tools {DISPLAY_VERSION} — Кадастровые инструменты"
+        )
         self.setMinimumSize(1050, 760)
         self.resize(1240, 860)
         icon_path = resource_path("icon.ico")
@@ -116,7 +119,7 @@ class Application(QMainWindow):
         self.theme_button.setMinimumHeight(40)
         self.theme_button.clicked.connect(self.theme_manager.toggle)
         side_layout.addWidget(self.theme_button)
-        version = QLabel("PySide6 edition")
+        version = QLabel(f"v {DISPLAY_VERSION}")
         version.setObjectName("brandSub")
         side_layout.addWidget(version)
         self.nav_buttons[0].setChecked(True)
@@ -149,6 +152,7 @@ class Application(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("K Tools")
+    app.setApplicationVersion(APP_VERSION)
     app.setStyle("Fusion")
     theme_manager = ThemeManager(app)
     window = Application(theme_manager)

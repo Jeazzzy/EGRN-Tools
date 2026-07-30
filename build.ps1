@@ -59,6 +59,7 @@ function Get-BootstrapPython {
 $buildEnvironment = Get-ProjectPath ".build-venv"
 $buildPython = Join-Path $buildEnvironment "Scripts\python.exe"
 $requirementsFile = Get-ProjectPath "requirements-build.txt"
+$versionFile = Get-ProjectPath "K_Tools\version.py"
 $selfTestScript = Get-ProjectPath "K_Tools\build_self_test.py"
 $specFile = Get-ProjectPath "K_Tools\K_Tools.spec"
 $workDirectory = Get-ProjectPath "build\pyinstaller"
@@ -66,9 +67,7 @@ $stageDirectory = Get-ProjectPath "build\release"
 $stageDist = Join-Path $stageDirectory "dist"
 $pythonTestReport = Join-Path $stageDirectory "python-gis-self-test.txt"
 $frozenTestReport = Join-Path $stageDirectory "frozen-gis-self-test.txt"
-$stageExe = Join-Path $stageDist "K_Tools.exe"
 $distDirectory = Get-ProjectPath "dist"
-$publishedExe = Join-Path $distDirectory "K_Tools.exe"
 
 if (-not (Test-Path -LiteralPath $buildPython -PathType Leaf)) {
     if (Test-Path -LiteralPath $buildEnvironment) {
@@ -91,6 +90,17 @@ Invoke-Native -FilePath $buildPython -Arguments @(
     "--only-binary=:all:", "-r", $requirementsFile
 )
 
+$artifactBaseName = (& $buildPython $versionFile).Trim()
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($artifactBaseName)) {
+    throw "Could not determine the application version from: $versionFile"
+}
+if ($artifactBaseName.IndexOfAny([System.IO.Path]::GetInvalidFileNameChars()) -ge 0) {
+    throw "Version produced an invalid executable name: $artifactBaseName"
+}
+$artifactFileName = "$artifactBaseName.exe"
+$stageExe = Join-Path $stageDist $artifactFileName
+$publishedExe = Join-Path $distDirectory $artifactFileName
+
 if (Test-Path -LiteralPath $stageDirectory) {
     Remove-Item -LiteralPath $stageDirectory -Recurse -Force
 }
@@ -112,7 +122,7 @@ catch {
     Invoke-Native -FilePath $buildPython -Arguments @($selfTestScript, $pythonTestReport)
 }
 
-Write-Host "Building K_Tools.exe..." -ForegroundColor Cyan
+Write-Host "Building $artifactFileName..." -ForegroundColor Cyan
 Push-Location $projectRoot
 try {
     Invoke-Native -FilePath $buildPython -Arguments @(
@@ -148,12 +158,12 @@ if ($process.ExitCode -ne 0) {
 
 # Publish only a build that passed the frozen MapInfo TAB round-trip test.
 New-Item -ItemType Directory -Path $distDirectory -Force | Out-Null
-Get-ChildItem -LiteralPath $distDirectory -Filter "K_Tools*.exe" -File |
+Get-ChildItem -LiteralPath $distDirectory -Filter "K_Tools*.exe*" -File |
     Remove-Item -Force
 Copy-Item -LiteralPath $stageExe -Destination $publishedExe -Force
 
 $hash = Get-FileHash -LiteralPath $publishedExe -Algorithm SHA256
-$hashLine = "$($hash.Hash.ToLowerInvariant())  K_Tools.exe"
+$hashLine = "$($hash.Hash.ToLowerInvariant())  $artifactFileName"
 Set-Content -LiteralPath "$publishedExe.sha256" -Value $hashLine -Encoding ASCII
 
 $sizeMb = [Math]::Round((Get-Item -LiteralPath $publishedExe).Length / 1MB, 1)
