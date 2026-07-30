@@ -1,25 +1,4 @@
 import os
-import sys
-
-
-# PyInstaller keeps pyogrio's GDAL dependencies in a nested directory.  Unlike
-# a regular wheel installation, that directory is not always on Windows' DLL
-# search path in a one-file build.  Keep the returned handles alive for the
-# lifetime of the process; closing them removes the directory again.
-_DLL_DIRECTORY_HANDLES = []
-if sys.platform == "win32" and getattr(sys, "frozen", False):
-    bundle_dir = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
-    pyogrio_libs = os.path.join(bundle_dir, "pyogrio.libs")
-    if os.path.isdir(pyogrio_libs):
-        _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(pyogrio_libs))
-        os.environ["PATH"] = pyogrio_libs + os.pathsep + os.environ.get("PATH", "")
-    gdal_data = os.path.join(bundle_dir, "pyogrio", "gdal_data")
-    proj_data = os.path.join(bundle_dir, "pyogrio", "proj_data")
-    if os.path.isdir(gdal_data):
-        os.environ["GDAL_DATA"] = gdal_data
-    if os.path.isdir(proj_data):
-        os.environ["PROJ_DATA"] = proj_data
-        os.environ["PROJ_LIB"] = proj_data
 
 import geopandas as gpd
 from PySide6.QtCore import Qt
@@ -117,7 +96,11 @@ class TzSplitterPage(BasePage):
 
     def load_np_fields(self, path):
         try:
-            fields = [column for column in gpd.read_file(path).columns if column != "geometry"]
+            fields = [
+                column
+                for column in gpd.read_file(path, engine="pyogrio").columns
+                if column != "geometry"
+            ]
             self.field_combo.clear()
             self.field_combo.addItems(fields)
             self.log(f"Поля НП: {fields}")
@@ -181,8 +164,8 @@ class TzSplitterPage(BasePage):
             f"Пороги: в НП ≥ {threshold_in:.0%}, вне НП < {threshold_out:.0%}"
         )
         signals.message.emit("Загрузка данных…")
-        np_gdf = cls.fix_geom(gpd.read_file(np_path))
-        tz_gdf = cls.fix_geom(gpd.read_file(tz_path))
+        np_gdf = cls.fix_geom(gpd.read_file(np_path, engine="pyogrio"))
+        tz_gdf = cls.fix_geom(gpd.read_file(tz_path, engine="pyogrio"))
         signals.message.emit(f"НП: {len(np_gdf)}, ТЗ: {len(tz_gdf)}")
         if name_field not in np_gdf.columns:
             raise ValueError(f"Поле «{name_field}» отсутствует в таблице НП")

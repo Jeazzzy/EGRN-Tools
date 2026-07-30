@@ -1,22 +1,37 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-from PyInstaller.utils.hooks import collect_data_files
+from pathlib import Path
+
+from PyInstaller.utils.hooks import collect_all, collect_delvewheel_libs_directory
 
 
-pyogrio_datas = collect_data_files(
-    'pyogrio',
-    includes=['gdal_data/**', 'proj_data/**'],
+app_dir = Path(SPECPATH)
+
+# pyogrio contains Cython extensions whose dependencies are invisible to
+# PyInstaller's static analysis (most importantly _io -> _geometry). Collect
+# every package module explicitly, as well as GDAL/PROJ data and the DLLs from
+# the sibling pyogrio.libs directory created by delvewheel.
+pyogrio_datas, pyogrio_binaries, pyogrio_hiddenimports = collect_all(
+    "pyogrio",
+    include_py_files=False,
+    filter_submodules=lambda name: not name.startswith("pyogrio.tests"),
 )
+pyogrio_datas, pyogrio_binaries = collect_delvewheel_libs_directory(
+    "pyogrio",
+    datas=pyogrio_datas,
+    binaries=pyogrio_binaries,
+)
+pyogrio_datas.append((str(app_dir / "icon.ico"), "."))
 
 a = Analysis(
-    ['main.py'],
-    pathex=[],
-    binaries=[],
+    [str(app_dir / "main.py")],
+    pathex=[str(app_dir)],
+    binaries=pyogrio_binaries,
     datas=pyogrio_datas,
-    hiddenimports=['pyogrio._geometry'],
+    hiddenimports=pyogrio_hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[str(app_dir / "hooks" / "pyi_rth_pyogrio.py")],
     excludes=[],
     noarchive=False,
     optimize=0,
@@ -29,11 +44,11 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='K_Tools 7.1.5',
+    name='K_Tools',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
@@ -42,5 +57,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['icon.ico'],
+    icon=[str(app_dir / "icon.ico")],
 )

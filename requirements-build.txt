@@ -1,0 +1,28 @@
+# Reproducible Windows/Python 3.12 build environment.
+# Update deliberately and only after the frozen GIS self-test succeeds.
+altgraph==0.17.5
+certifi==2026.7.22
+et_xmlfile==2.0.0
+geopandas==1.1.4
+numpy==2.5.1
+openpyxl==3.1.5
+packaging==26.2
+pandas==3.0.5
+pefile==2024.8.26
+pyinstaller==6.21.0
+pyinstaller-hooks-contrib==2026.6
+pyodbc==5.3.0
+pyogrio==0.13.0
+pypdf==6.14.2
+pyproj==3.7.2
+PySide6==6.11.1
+PySide6_Addons==6.11.1
+PySide6_Essentials==6.11.1
+python-dateutil==2.9.0.post0
+pywin32-ctypes==0.2.3
+scipy==1.18.0
+setuptools==83.0.0
+shapely==2.1.2
+shiboken6==6.11.1
+six==1.17.0
+tzdata==2026.3

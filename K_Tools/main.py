@@ -5,6 +5,15 @@ from __future__ import annotations
 import os
 import sys
 
+
+# The build script launches the finished windowed EXE with this private flag.
+# Keep the branch before Qt and application imports so packaging failures are
+# reported by the focused GIS test instead of being hidden by the GUI.
+if __name__ == "__main__" and "--build-self-test" in sys.argv:
+    from build_self_test import run as run_build_self_test
+
+    raise SystemExit(run_build_self_test(os.environ.get("K_TOOLS_SELF_TEST_REPORT")))
+
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
