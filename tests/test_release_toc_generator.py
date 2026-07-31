@@ -23,6 +23,7 @@ def pdf_result(
     file_name,
     relative_path,
     page_count,
+    object_name="",
 ):
     return PdfAreaResult(
         settlement=settlement,
@@ -32,6 +33,7 @@ def pdf_result(
         area="100",
         page_count=page_count,
         status=STATUS_FOUND,
+        object_name=object_name,
     )
 
 
@@ -89,6 +91,48 @@ def make_template(path, pages=2):
 
 
 class TocEntriesTests(unittest.TestCase):
+    def test_tz_mode_builds_titles_from_pdf_without_xml(self):
+        entries, missing = build_toc_entries(
+            [
+                pdf_result(
+                    "Вне НП",
+                    "ВИ1.pdf",
+                    r"Вне НП\ВИ1.pdf",
+                    3,
+                    "ВИ1. Зона виноградников Краснодарского края",
+                )
+            ],
+            [],
+            RELEASE_MODE_TZ,
+            first_page=3,
+        )
+
+        self.assertIn("ВИ1. Зона виноградников", entries[0].title)
+        self.assertEqual(missing, 0)
+
+    def test_np_mode_builds_title_from_pdf_without_xml(self):
+        entries, missing = build_toc_entries(
+            [
+                pdf_result(
+                    "р.п. Геофизик",
+                    "р.п. Геофизик.pdf",
+                    "р.п. Геофизик.pdf",
+                    4,
+                    "Граница населенного пункта – поселок Геофизик",
+                )
+            ],
+            [],
+            RELEASE_MODE_NP,
+            first_page=2,
+        )
+
+        self.assertEqual(
+            entries[0].title,
+            "Графическое описание местоположения границы населенного "
+            "пункта – поселок Геофизик",
+        )
+        self.assertEqual(missing, 0)
+
     def test_tz_mode_excludes_combined_root_pdf_and_accumulates_pages(self):
         pdf_results = [
             pdf_result("Вне НП", "Вне НП.pdf", "Вне НП.pdf", 20),

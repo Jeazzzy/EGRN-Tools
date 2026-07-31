@@ -97,14 +97,20 @@ def _entry_title(
     release_mode: str,
 ) -> str:
     if release_mode == RELEASE_MODE_NP:
-        object_name = xml_title or f"граница населённого пункта – {pdf_result.settlement}"
+        object_name = (
+            xml_title
+            or pdf_result.object_name
+            or f"граница населённого пункта – {pdf_result.settlement}"
+        )
         if object_name.casefold().startswith("граница "):
             object_name = "границы " + object_name[len("граница ") :]
         elif object_name:
             object_name = object_name[0].lower() + object_name[1:]
         return f"Графическое описание местоположения {object_name}"
 
-    object_name = xml_title or Path(pdf_result.file_name).stem
+    object_name = (
+        xml_title or pdf_result.object_name or Path(pdf_result.file_name).stem
+    )
     return (
         "Графическое описание местоположения границ территориальной зоны – "
         f"{object_name}"
@@ -144,7 +150,7 @@ def build_toc_entries(
                 _normalised(Path(result.file_name).stem),
             )
         xml_title = title_map.get(key)
-        if not xml_title:
+        if not xml_title and not result.object_name:
             missing_xml_count += 1
         entries.append(
             TocEntry(

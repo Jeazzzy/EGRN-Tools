@@ -7,6 +7,7 @@ from core.release_checker import (
     STATUS_MULTIPLE,
     STATUS_NOT_FOUND,
     extract_area_values,
+    extract_object_name,
     find_pdf_files,
     inspect_pdf,
     locate_pdf_folder,
@@ -44,6 +45,26 @@ class ExtractAreaValuesTests(unittest.TestCase):
 
     def test_does_not_take_unrelated_area(self):
         self.assertEqual(extract_area_values("Общая площадь, м² 527210 ± 12707"), [])
+
+
+class ExtractObjectNameTests(unittest.TestCase):
+    def test_extracts_object_name_from_first_page_heading(self):
+        text = """
+        ГРАФИЧЕСКОЕ ОПИСАНИЕ
+        местоположения границ населенных пунктов, территориальных зон,
+        зон с особыми условиями использования территории
+        ВИ1. Зона виноградников Краснодарского края
+        (наименование объекта, местоположение границ которого описано
+        (далее - объект))
+        """
+
+        self.assertEqual(
+            extract_object_name(text),
+            "ВИ1. Зона виноградников Краснодарского края",
+        )
+
+    def test_returns_empty_string_for_unrelated_pdf(self):
+        self.assertEqual(extract_object_name("Произвольный документ"), "")
 
 
 class FolderDiscoveryTests(unittest.TestCase):

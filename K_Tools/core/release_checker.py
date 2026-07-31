@@ -31,6 +31,11 @@ _AREA_VALUE_PATTERN = re.compile(
     """,
     re.IGNORECASE | re.VERBOSE,
 )
+_OBJECT_NAME_PATTERN = re.compile(
+    r"условиями\s+использования\s+территории\s+"
+    r"(?P<name>.+?)\s*\(наименование\s+объекта",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -45,6 +50,7 @@ class PdfAreaResult:
     page_count: int
     status: str
     details: str = ""
+    object_name: str = ""
 
 
 def _normalise_text(text: str) -> str:
@@ -72,6 +78,16 @@ def extract_area_values(text: str) -> list[str]:
         if value and value not in values:
             values.append(value)
     return values
+
+
+def extract_object_name(text: str) -> str:
+    """Извлекает полное наименование объекта с первой страницы ОМГ."""
+
+    normalised = _normalise_text(text)
+    match = _OBJECT_NAME_PATTERN.search(normalised)
+    if not match:
+        return ""
+    return match.group("name").strip(" .,:;–—-")
 
 
 def locate_pdf_folder(selected_folder: str | Path) -> Path:
@@ -181,10 +197,12 @@ def inspect_pdf_page_count(
         reader = PdfReader(str(pdf_path), strict=False)
         if reader.is_encrypted and not reader.decrypt(""):
             raise ValueError("PDF защищён паролем.")
+        first_page_text = reader.pages[0].extract_text() if reader.pages else ""
         return PdfAreaResult(
             **common,
             page_count=len(reader.pages),
             status=STATUS_FOUND,
+            object_name=extract_object_name(first_page_text or ""),
         )
     except Exception as error:
         return PdfAreaResult(
@@ -239,6 +257,7 @@ def inspect_pdf(
                 details="В PDF нет извлекаемого текста. Возможно, это скан.",
             )
 
+        object_name = extract_object_name(text)
         values = extract_area_values(text)
         if len(values) == 1:
             return PdfAreaResult(
@@ -246,6 +265,7 @@ def inspect_pdf(
                 area=values[0],
                 page_count=page_count,
                 status=STATUS_FOUND,
+                object_name=object_name,
             )
         if len(values) > 1:
             return PdfAreaResult(
@@ -254,6 +274,7 @@ def inspect_pdf(
                 page_count=page_count,
                 status=STATUS_MULTIPLE,
                 details="В документе найдены разные значения площади.",
+                object_name=object_name,
             )
         return PdfAreaResult(
             **common,
@@ -261,6 +282,7 @@ def inspect_pdf(
             page_count=page_count,
             status=STATUS_NOT_FOUND,
             details="Строка «Площадь объекта …, м²» не найдена.",
+            object_name=object_name,
         )
     except Exception as error:
         return PdfAreaResult(

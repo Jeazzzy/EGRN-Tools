@@ -125,9 +125,15 @@ class ReleaseCheckerPage(BasePage):
         self.export_button.clicked.connect(self.export_xlsx)
         self.toc_button = QPushButton("Создать оглавление")
         self.toc_button.clicked.connect(self.create_toc)
+        self.toc_without_xml_checkbox = QCheckBox("Собрать без XML")
+        self.toc_without_xml_checkbox.setToolTip(
+            "Оглавление будет собрано только по PDF. Названия объектов "
+            "программа прочитает с первых страниц документов."
+        )
         action_row.addWidget(self.check_button)
         action_row.addWidget(self.xml_check_button)
         action_row.addWidget(self.export_button)
+        action_row.addWidget(self.toc_without_xml_checkbox)
         action_row.addWidget(self.toc_button)
         source.addLayout(action_row)
 
@@ -565,6 +571,7 @@ class ReleaseCheckerPage(BasePage):
             ),
             self.tablet_2000_checkbox.isChecked(),
             self.release_mode_combo.currentData(),
+            self.toc_without_xml_checkbox.isChecked(),
             on_result=self._toc_created,
             on_error=lambda text: self.show_error(text, "оглавления"),
             on_finished=lambda: self._set_check_buttons_enabled(True),
@@ -579,15 +586,18 @@ class ReleaseCheckerPage(BasePage):
         accuracy,
         mixed_tablet_accuracy,
         release_mode,
+        without_xml,
     ):
         pdf_folder = locate_pdf_folder(selected_folder)
         pdf_files = find_pdf_files(pdf_folder)
         if not pdf_files:
             raise ValueError("В папке PDF нет PDF-файлов.")
-        xml_folder = locate_xml_folder(selected_folder)
-        archives = find_xml_archives(xml_folder)
-        if not archives:
-            raise ValueError("В папке XML нет ZIP-архивов.")
+        archives = []
+        if not without_xml:
+            xml_folder = locate_xml_folder(selected_folder)
+            archives = find_xml_archives(xml_folder)
+            if not archives:
+                raise ValueError("В папке XML нет ZIP-архивов.")
 
         pdf_results = []
         total = len(pdf_files) + len(archives)
@@ -627,8 +637,8 @@ class ReleaseCheckerPage(BasePage):
         warning = ""
         if result.missing_xml_count:
             warning += (
-                f"\n\nДля {result.missing_xml_count} PDF не найдено совпадающее "
-                f"название в XML — использовано имя файла."
+                f"\n\nДля {result.missing_xml_count} PDF название не найдено "
+                f"ни в XML, ни на первой странице PDF — использовано имя файла."
             )
         if not result.repaginated_with_word:
             warning += (

@@ -84,6 +84,8 @@
 - экспорт результатов PDF и XML на отдельные листы XLSX.
 - создание DOCX-оглавления на основе титульника выпуска, названий объектов
   из XML и накопительного количества страниц PDF;
+- режим «Собрать без XML»: названия объектов для оглавления извлекаются с
+  первых страниц PDF;
 
 ## Системные требования
 
@@ -134,8 +136,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 
 ```text
 dist/
-├── K_Tools 7.2.1 stable.exe
-└── K_Tools 7.2.1 stable.exe.sha256
+├── K_Tools 7.2.3 stable.exe
+└── K_Tools 7.2.3 stable.exe.sha256
 ```
 
 Предыдущий рабочий EXE сохраняется, если сборка или самопроверка завершилась
@@ -146,7 +148,7 @@ dist/
 Номер версии и канал выпуска задаются в `K_Tools/version.py`:
 
 ```python
-APP_VERSION = "7.2.1"
+APP_VERSION = "7.2.3"
 RELEASE_CHANNEL = "stable"
 ```
 
