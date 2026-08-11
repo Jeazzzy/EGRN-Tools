@@ -68,6 +68,17 @@ class ExtractObjectNameTests(unittest.TestCase):
 
 
 class FolderDiscoveryTests(unittest.TestCase):
+    def test_pdf_files_use_natural_index_order(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name in ("И10.pdf", "И2.pdf", "И1.pdf"):
+                (root / name).touch()
+
+            self.assertEqual(
+                [path.name for path in find_pdf_files(root)],
+                ["И1.pdf", "И2.pdf", "И10.pdf"],
+            )
+
     def test_locates_pdf_child_case_insensitively(self):
         with TemporaryDirectory() as temporary:
             release = Path(temporary)

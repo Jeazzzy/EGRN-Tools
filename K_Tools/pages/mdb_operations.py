@@ -2,20 +2,25 @@ import os
 import re
 import shutil
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QMessageBox,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from core import BasePage, IndexSelector, PathEdit
+from core.settlement_names import SETTLEMENT_TYPE_GENITIVE
 
 try:
     import pyodbc
@@ -26,30 +31,7 @@ except ImportError:
 
 
 class MdbCopyPage(BasePage):
-    TYPE_GENITIVE = {
-        "аал": "аала", "автодорога": "автодороги", "арбан": "арбана",
-        "аул": "аула", "волость": "волости", "высел": "выселок",
-        "г": "города", "городок": "городка", "д": "деревни",
-        "дп": "дачного поселка", "ж/д_будка": "железнодорожной будки",
-        "ж/д_казарм": "железнодорожной казармы",
-        "ж/д_оп": "ж/д остановочного (обгонного) пункта",
-        "ж/д_платф": "железнодорожной платформы",
-        "ж/д_пост": "железнодорожного поста",
-        "ж/д_рзд": "железнодорожного разъезда",
-        "ж/д_ст": "железнодорожной станции", "жилзона": "жилой зоны",
-        "жилрайон": "жилого района", "заимка": "заимки", "казарма": "казармы",
-        "кв-л": "квартала", "кордон": "кордона", "кп": "курортного поселка",
-        "лпх": "леспромхоза", "м": "местечка", "массив": "массива",
-        "мкр": "микрорайона", "нп": "населенного пункта", "остров": "острова",
-        "п": "поселка", "п/о": "почтового отделения",
-        "п/р": "планировочного района", "п/ст": "поселка и(при) станции(и)",
-        "пгт": "поселка городского типа", "погост": "погоста",
-        "починок": "починка", "промзона": "промышленной зоны",
-        "рзд": "разъезда", "рп": "рабочего поселка", "с": "села",
-        "сл": "слободы", "снт": "садового некоммерческого товарищества",
-        "ст": "станции", "ст-ца": "станицы", "тер": "территории",
-        "у": "улуса", "х": "хутора",
-    }
+    TYPE_GENITIVE = SETTLEMENT_TYPE_GENITIVE
 
     def __init__(self, controller=None, parent=None):
         super().__init__(controller, parent)
@@ -57,6 +39,7 @@ class MdbCopyPage(BasePage):
             "Работа с MDB",
             "Массовая замена файлов и таблиц Microsoft Access.",
         )
+        root.setSpacing(12)
         if not PYODBC_AVAILABLE:
             warning = QLabel("pyodbc не установлен. Добавьте зависимость перед работой с MDB.")
             warning.setObjectName("warningBanner")
@@ -69,23 +52,56 @@ class MdbCopyPage(BasePage):
         self._build_replace_table()
         self._build_fias()
         self._build_text()
+        self.tabs.currentChanged.connect(self._fit_current_tab)
         self.run_btn = QPushButton("Запустить операцию")
         self.run_btn.setProperty("primary", True)
         self.run_btn.clicked.connect(self.run_operation)
         root.addWidget(self.run_btn)
         root.addWidget(self.setup_progress_bar())
-        _, logs = self.card_layout(root, "Журнал")
-        logs.addWidget(self.setup_log_area())
+        log_card, logs = self.card_layout(root, "Журнал")
+        log_card.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
+        log_text = self.setup_log_area()
+        log_text.setMinimumHeight(100)
+        logs.addWidget(log_text)
+        root.setStretch(root.indexOf(log_card), 1)
+        self._fit_current_tab()
 
     @staticmethod
     def _tab():
+        """Вкладка с собственной прокруткой для компактной высоты окна."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(16, 16, 16, 16)
-        return widget, layout
+        scroll.setWidget(widget)
+        return scroll, layout
+
+    @staticmethod
+    def _note(text):
+        note = QLabel(text)
+        note.setWordWrap(True)
+        return note
+
+    def _fit_current_tab(self, *_):
+        """Не оставляет пустой пол-экрана в коротких вкладках MDB."""
+        current = self.tabs.currentWidget()
+        if current is None:
+            return
+        height = current.sizeHint().height() + self.tabs.tabBar().sizeHint().height() + 20
+        self.tabs.setMaximumHeight(max(170, min(300, height)))
+        self.layout().invalidate()
+        self.updateGeometry()
 
     def _directory_row(self, layout, label, source_selector=None):
-        layout.addWidget(QLabel(label))
+        layout.addWidget(self._note(label))
         row = QHBoxLayout()
         edit = PathEdit()
         button = QPushButton("Выбрать")
@@ -99,7 +115,7 @@ class MdbCopyPage(BasePage):
         return edit
 
     def _file_row(self, layout, label, callback):
-        layout.addWidget(QLabel(label))
+        layout.addWidget(self._note(label))
         row = QHBoxLayout()
         edit = PathEdit()
         button = QPushButton("Выбрать MDB")
@@ -111,8 +127,7 @@ class MdbCopyPage(BasePage):
 
     def _build_replace_mdb(self):
         tab, layout = self._tab()
-        note = QLabel("Полностью заменяет target MDB файлом из папки соответствующего индекса.")
-        note.setWordWrap(True)
+        note = self._note("Полностью заменяет target MDB файлом из папки соответствующего индекса.")
         layout.addWidget(note)
         self.replace_selector = IndexSelector()
         self.replace_source = self._directory_row(
@@ -127,7 +142,7 @@ class MdbCopyPage(BasePage):
 
     def _build_vri(self):
         tab, layout = self._tab()
-        note = QLabel("Копирует таблицу Utilizations_KP между MDB одинакового индекса.")
+        note = self._note("Копирует таблицу Utilizations_KP между MDB одинакового индекса.")
         layout.addWidget(note)
         self.vri_selector = IndexSelector()
         self.vri_source = self._directory_row(
@@ -157,7 +172,7 @@ class MdbCopyPage(BasePage):
 
     def _build_fias(self):
         tab, layout = self._tab()
-        layout.addWidget(QLabel("Обновляет таблицу Locations во всех target MDB."))
+        layout.addWidget(self._note("Обновляет таблицу Locations во всех target MDB."))
         self.fias_source = self._file_row(layout, "Source MDB", self._pick_mdb)
         self.fias_target = self._directory_row(layout, "Target: папка с MDB")
         self.tabs.addTab(tab, "Адрес по ФИАС")
@@ -165,10 +180,13 @@ class MdbCopyPage(BasePage):
     def _build_text(self):
         tab, layout = self._tab()
         layout.addWidget(
-            QLabel("Обновляет поле Объект_ЗУ таблицы Титульный_картаплан по Locations.")
+            self._note("Обновляет поле Объект_ЗУ таблицы Титульный_картаплан по Locations.")
         )
         self.text_folder = self._directory_row(layout, "Папка с MDB")
-        self.text_outside = QCheckBox("Вне НП — текст без названия населённого пункта")
+        self.text_outside = QCheckBox("Вне НП — без названия НП")
+        self.text_outside.setToolTip(
+            "Формировать текст без названия населённого пункта."
+        )
         layout.addWidget(self.text_outside)
         self.tabs.addTab(tab, "Адрес в тексте")
 

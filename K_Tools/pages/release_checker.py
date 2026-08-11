@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from core import BasePage, CopyTableWidget, PathEdit
+from core import BasePage, CopyTableWidget, FlowPanel, PathEdit
 from core.release_checker import (
     STATUS_FOUND,
     STATUS_MULTIPLE,
@@ -35,7 +35,12 @@ from core.release_checker import (
     locate_pdf_folder,
 )
 from core.release_xlsx_exporter import export_release_results
-from core.release_toc_generator import create_release_toc
+from core.release_toc_generator import (
+    TOC_SCOPE_OBJECTS,
+    TOC_SCOPE_SETTLEMENTS,
+    create_release_toc,
+)
+from core.settlement_names import settlement_key
 from core.release_xml_checker import (
     RELEASE_MODE_NP,
     RELEASE_MODE_TZ,
@@ -46,6 +51,69 @@ from core.release_xml_checker import (
     locate_xml_folder,
 )
 from theme import set_semantic_background
+
+
+def _toc_selection_context(selected_folder: str | Path) -> tuple[Path, str | None]:
+    """Возвращает корень выпуска и ключ выбранной папки НП, если он есть."""
+
+    selected = Path(selected_folder)
+    if selected.name.casefold() in {"pdf", "xml"}:
+        return selected.parent, None
+    if selected.parent.name.casefold() in {"pdf", "xml"}:
+        return selected.parent.parent, settlement_key(selected.name)
+    return selected, None
+
+
+def _toc_pdf_selection(
+    selected_folder: str | Path,
+    toc_scope: str,
+) -> tuple[Path, list[Path], Path, str | None]:
+    """Разделяет папку сканирования и логический корень структуры PDF."""
+
+    selected = Path(selected_folder)
+    release_root, selected_settlement = _toc_selection_context(selected)
+    pdf_root = locate_pdf_folder(release_root if selected_settlement else selected)
+
+    if not selected_settlement:
+        return pdf_root, find_pdf_files(pdf_root), release_root, None
+
+    if toc_scope == TOC_SCOPE_SETTLEMENTS:
+        pdf_files = [
+            path
+            for path in find_pdf_files(pdf_root)
+            if path.parent.resolve() == pdf_root.resolve()
+            and settlement_key(path.stem) == selected_settlement
+        ]
+    else:
+        settlement_folders = [
+            child
+            for child in pdf_root.iterdir()
+            if child.is_dir()
+            and settlement_key(child.name) == selected_settlement
+        ]
+        pdf_files = [
+            path
+            for folder in settlement_folders
+            for path in find_pdf_files(folder)
+        ]
+    return pdf_root, pdf_files, release_root, selected_settlement
+
+
+def _toc_xml_selection(
+    release_root: Path,
+    selected_settlement: str | None,
+) -> list[Path]:
+    xml_root = locate_xml_folder(release_root)
+    archives = find_xml_archives(xml_root)
+    if not selected_settlement:
+        return archives
+    return [
+        path
+        for path in archives
+        if path.relative_to(xml_root).parts
+        and settlement_key(path.relative_to(xml_root).parts[0])
+        == selected_settlement
+    ]
 
 
 class ReleaseCheckerPage(BasePage):
@@ -79,17 +147,37 @@ class ReleaseCheckerPage(BasePage):
         source_row.addWidget(browse_button)
         source.addLayout(source_row)
 
-        action_row = QHBoxLayout()
-        action_row.addWidget(QLabel("Режим выпуска:"))
+        action_panel = FlowPanel(horizontal_spacing=12, vertical_spacing=10)
+        action_row = action_panel.flow_layout
+
+        mode_group = QWidget()
+        mode_layout = QHBoxLayout(mode_group)
+        mode_layout.setContentsMargins(0, 0, 0, 0)
+        mode_layout.setSpacing(8)
+        mode_layout.addWidget(QLabel("Режим выпуска:"))
         self.release_mode_combo = QComboBox()
         self.release_mode_combo.addItem("Территориальные зоны (ТЗ)", RELEASE_MODE_TZ)
         self.release_mode_combo.addItem("Населённые пункты (НП)", RELEASE_MODE_NP)
         self.release_mode_combo.currentIndexChanged.connect(
             self._release_mode_changed
         )
-        action_row.addWidget(self.release_mode_combo)
+        self.release_mode_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.release_mode_combo.setMinimumContentsLength(8)
+        self.release_mode_combo.setMaximumWidth(300)
+        mode_layout.addWidget(self.release_mode_combo)
+        action_row.addWidget(mode_group)
 
-        action_row.addWidget(QLabel("Допустимая точность XML:"))
+        accuracy_group = QWidget()
+        accuracy_layout = QHBoxLayout(accuracy_group)
+        accuracy_layout.setContentsMargins(0, 0, 0, 0)
+        accuracy_layout.setSpacing(8)
+        accuracy_label = QLabel("Точность XML:")
+        accuracy_label.setToolTip(
+            "Допустимая точность определения координат в выпускных XML."
+        )
+        accuracy_layout.addWidget(accuracy_label)
         self.accuracy_spin = QDoubleSpinBox()
         self.accuracy_spin.setDecimals(2)
         self.accuracy_spin.setRange(0.01, 10000.0)
@@ -98,7 +186,8 @@ class ReleaseCheckerPage(BasePage):
         self.accuracy_spin.setSuffix(" м")
         self.accuracy_spin.setKeyboardTracking(False)
         self.accuracy_spin.setMaximumWidth(150)
-        action_row.addWidget(self.accuracy_spin)
+        accuracy_layout.addWidget(self.accuracy_spin)
+        action_row.addWidget(accuracy_group)
 
         self.tablet_2000_checkbox = QCheckBox(
             "Планшеты 1:2000"
@@ -112,7 +201,6 @@ class ReleaseCheckerPage(BasePage):
             self._tablet_2000_mode_changed
         )
         action_row.addWidget(self.tablet_2000_checkbox)
-        action_row.addStretch()
 
         self.check_button = QPushButton("Проверить PDF")
         self.check_button.setProperty("primary", True)
@@ -124,18 +212,34 @@ class ReleaseCheckerPage(BasePage):
         self.export_button.setEnabled(False)
         self.export_button.clicked.connect(self.export_xlsx)
         self.toc_button = QPushButton("Создать оглавление")
-        self.toc_button.clicked.connect(self.create_toc)
-        self.toc_without_xml_checkbox = QCheckBox("Собрать без XML")
-        self.toc_without_xml_checkbox.setToolTip(
-            "Оглавление будет собрано только по PDF. Названия объектов "
-            "программа прочитает с первых страниц документов."
+        self.toc_menu = QMenu(self.toc_button)
+        toc_with_xml_action = self.toc_menu.addAction(
+            "По отдельным PDF (с XML)"
         )
+        toc_with_xml_action.triggered.connect(
+            lambda checked=False: self.create_toc(False, TOC_SCOPE_OBJECTS)
+        )
+        toc_without_xml_action = self.toc_menu.addAction(
+            "По отдельным PDF (без XML)"
+        )
+        toc_without_xml_action.triggered.connect(
+            lambda checked=False: self.create_toc(True, TOC_SCOPE_OBJECTS)
+        )
+        toc_settlements_action = self.toc_menu.addAction(
+            "По общим PDF ТЗ для населённых пунктов"
+        )
+        toc_settlements_action.triggered.connect(
+            lambda checked=False: self.create_toc(
+                True,
+                TOC_SCOPE_SETTLEMENTS,
+            )
+        )
+        self.toc_button.setMenu(self.toc_menu)
         action_row.addWidget(self.check_button)
         action_row.addWidget(self.xml_check_button)
         action_row.addWidget(self.export_button)
-        action_row.addWidget(self.toc_without_xml_checkbox)
         action_row.addWidget(self.toc_button)
-        source.addLayout(action_row)
+        source.addWidget(action_panel)
 
         self.detected_folder_label = QLabel("Папка выпуска ещё не выбрана")
         self.detected_folder_label.setObjectName("pageSubtitle")
@@ -497,7 +601,11 @@ class ReleaseCheckerPage(BasePage):
             f"Результаты сохранены: {saved_path}",
         )
 
-    def _find_toc_template(self, selected_folder):
+    def _find_toc_template(
+        self,
+        selected_folder,
+        toc_scope=TOC_SCOPE_OBJECTS,
+    ):
         search_roots = [selected_folder]
         if selected_folder.name.casefold() in {"pdf", "xml"}:
             search_roots.append(selected_folder.parent)
@@ -513,27 +621,41 @@ class ReleaseCheckerPage(BasePage):
                     continue
                 seen.add(resolved)
                 candidates.append(path)
-        preferred = [
-            path
-            for path in candidates
-            if path.name.casefold() == "титульник для омг.docx"
-        ]
-        matches = preferred or [
-            path
-            for path in candidates
-            if "титульник" in path.stem.casefold()
-            or "оглавлен" in path.stem.casefold()
-        ]
+        if toc_scope == TOC_SCOPE_SETTLEMENTS:
+            preferred = [
+                path
+                for path in candidates
+                if "том_нп" in path.stem.casefold()
+                or "том нп" in path.stem.casefold()
+            ]
+        else:
+            preferred = [
+                path
+                for path in candidates
+                if path.name.casefold() == "титульник для омг.docx"
+            ]
+        matches = preferred
+        if toc_scope == TOC_SCOPE_OBJECTS and not matches:
+            matches = [
+                path
+                for path in candidates
+                if "титульник" in path.stem.casefold()
+                or "оглавлен" in path.stem.casefold()
+            ]
         if not matches:
             return None
         return sorted(matches, key=lambda path: str(path).casefold())[0]
 
-    def create_toc(self):
+    def create_toc(
+        self,
+        without_xml=False,
+        toc_scope=TOC_SCOPE_OBJECTS,
+    ):
         selected_folder = self._selected_folder()
         if selected_folder is None:
             return
 
-        template_path = self._find_toc_template(selected_folder)
+        template_path = self._find_toc_template(selected_folder, toc_scope)
         if template_path is None:
             selected, _ = QFileDialog.getOpenFileName(
                 self,
@@ -545,10 +667,15 @@ class ReleaseCheckerPage(BasePage):
                 return
             template_path = Path(selected)
 
-        release_root = selected_folder
+        release_root, _ = _toc_selection_context(selected_folder)
         if selected_folder.name.casefold() in {"pdf", "xml"}:
             release_root = selected_folder.parent
-        suggested = release_root / "Оглавление.docx"
+        output_name = (
+            "Оглавление по общим PDF НП.docx"
+            if toc_scope == TOC_SCOPE_SETTLEMENTS
+            else "Оглавление.docx"
+        )
+        suggested = release_root / output_name
         output, _ = QFileDialog.getSaveFileName(
             self,
             "Сохранить оглавление",
@@ -570,8 +697,13 @@ class ReleaseCheckerPage(BasePage):
                 f"{self.accuracy_spin.value():.{self.accuracy_spin.decimals()}f}"
             ),
             self.tablet_2000_checkbox.isChecked(),
-            self.release_mode_combo.currentData(),
-            self.toc_without_xml_checkbox.isChecked(),
+            (
+                RELEASE_MODE_TZ
+                if toc_scope == TOC_SCOPE_SETTLEMENTS
+                else self.release_mode_combo.currentData()
+            ),
+            without_xml,
+            toc_scope,
             on_result=self._toc_created,
             on_error=lambda text: self.show_error(text, "оглавления"),
             on_finished=lambda: self._set_check_buttons_enabled(True),
@@ -587,16 +719,29 @@ class ReleaseCheckerPage(BasePage):
         mixed_tablet_accuracy,
         release_mode,
         without_xml,
+        toc_scope,
     ):
-        pdf_folder = locate_pdf_folder(selected_folder)
-        pdf_files = find_pdf_files(pdf_folder)
+        (
+            pdf_folder,
+            pdf_files,
+            release_root,
+            selected_settlement,
+        ) = _toc_pdf_selection(selected_folder, toc_scope)
         if not pdf_files:
+            if toc_scope == TOC_SCOPE_SETTLEMENTS and selected_settlement:
+                raise ValueError(
+                    "Для выбранного населённого пункта не найден общий PDF."
+                )
             raise ValueError("В папке PDF нет PDF-файлов.")
         archives = []
         if not without_xml:
-            xml_folder = locate_xml_folder(selected_folder)
-            archives = find_xml_archives(xml_folder)
+            archives = _toc_xml_selection(release_root, selected_settlement)
             if not archives:
+                if selected_settlement:
+                    raise ValueError(
+                        "Для выбранного населённого пункта не найдены "
+                        "ZIP-архивы XML."
+                    )
                 raise ValueError("В папке XML нет ZIP-архивов.")
 
         pdf_results = []
@@ -624,6 +769,7 @@ class ReleaseCheckerPage(BasePage):
             pdf_results,
             xml_results,
             release_mode,
+            toc_scope=toc_scope,
         )
         signals.progress.emit(total, total)
         return result

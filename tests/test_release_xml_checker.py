@@ -365,6 +365,21 @@ class ParseXmlReleaseTests(unittest.TestCase):
 
 
 class XmlArchiveTests(unittest.TestCase):
+    def test_xml_archives_use_natural_index_order(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = []
+            for index in ("И10", "И2", "И1"):
+                path = root / index / "boundaries.zip"
+                path.parent.mkdir()
+                path.touch()
+                paths.append(path)
+
+            self.assertEqual(
+                [path.parent.name for path in find_xml_archives(root)],
+                ["И1", "И2", "И10"],
+            )
+
     def test_locates_xml_folder_and_reads_xml_from_zip(self):
         with TemporaryDirectory() as temporary:
             release = Path(temporary)

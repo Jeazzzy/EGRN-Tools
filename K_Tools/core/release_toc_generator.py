@@ -15,6 +15,13 @@ from xml.etree import ElementTree
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from .release_checker import PdfAreaResult
+from .settlement_names import (
+    is_outside_settlement,
+    normalise_settlement_text as _normalised,
+    settlement_in_genitive as _settlement_in_genitive,
+    settlement_key as _settlement_key,
+)
+from .sorting import natural_path_key
 from .release_xml_checker import (
     RELEASE_MODE_NP,
     RELEASE_MODE_TZ,
@@ -25,6 +32,11 @@ from .release_xml_checker import (
 WORD_NAMESPACE = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 APP_NAMESPACE = (
     "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
+)
+TOC_SCOPE_OBJECTS = "objects"
+TOC_SCOPE_SETTLEMENTS = "settlements"
+_DEFAULT_SETTLEMENT_TITLE_PREFIX = (
+    "Графические описания местоположения границ территориальных зон в границах"
 )
 
 
@@ -50,23 +62,17 @@ class TocCreationResult:
     repaginated_with_word: bool
 
 
-def _normalised(value: str) -> str:
-    return " ".join((value or "").casefold().replace("ё", "е").split())
-
-
-def _settlement_key(value: str) -> str:
-    cleaned = _normalised(value)
-    cleaned = re.sub(
-        r"^(?:(?:р\s*\.?\s*п)|ст\s*-\s*ца|г|п|с|д|пос|поселок|"
-        r"город|село|деревня|станица)\.?\s+",
-        "",
-        cleaned,
-    )
-    return cleaned.strip(" .«»\"'")
-
-
-def _is_toc_pdf(result: PdfAreaResult, release_mode: str) -> bool:
+def _is_toc_pdf(
+    result: PdfAreaResult,
+    release_mode: str,
+    toc_scope: str,
+) -> bool:
     parts = PurePath(result.relative_path).parts
+    if toc_scope == TOC_SCOPE_SETTLEMENTS:
+        return (
+            len(parts) == 1
+            and not is_outside_settlement(Path(result.file_name).stem)
+        )
     if release_mode == RELEASE_MODE_NP:
         return len(parts) == 1
     return len(parts) >= 2
@@ -95,7 +101,17 @@ def _entry_title(
     pdf_result: PdfAreaResult,
     xml_title: str | None,
     release_mode: str,
+    toc_scope: str,
+    settlement_title_format: tuple[str, str] | None = None,
 ) -> str:
+    if toc_scope == TOC_SCOPE_SETTLEMENTS:
+        settlement = _settlement_in_genitive(Path(pdf_result.file_name).stem)
+        prefix, suffix = settlement_title_format or (
+            _DEFAULT_SETTLEMENT_TITLE_PREFIX,
+            "",
+        )
+        return " ".join(part for part in (prefix, settlement, suffix) if part)
+
     if release_mode == RELEASE_MODE_NP:
         object_name = (
             xml_title
@@ -122,11 +138,19 @@ def build_toc_entries(
     xml_results: Iterable[XmlReleaseResult],
     release_mode: str,
     first_page: int,
+    toc_scope: str = TOC_SCOPE_OBJECTS,
+    settlement_title_format: tuple[str, str] | None = None,
 ) -> tuple[list[TocEntry], int]:
     """Сопоставляет PDF с XML и вычисляет номера первых страниц."""
 
     if release_mode not in {RELEASE_MODE_TZ, RELEASE_MODE_NP}:
         raise ValueError(f"Неизвестный режим выпуска «{release_mode}».")
+    if toc_scope not in {TOC_SCOPE_OBJECTS, TOC_SCOPE_SETTLEMENTS}:
+        raise ValueError(f"Неизвестный состав оглавления «{toc_scope}».")
+    if toc_scope == TOC_SCOPE_SETTLEMENTS and release_mode != RELEASE_MODE_TZ:
+        raise ValueError(
+            "Общие PDF по населённым пунктам создаются для выпуска ТЗ."
+        )
     if first_page < 1:
         raise ValueError("Номер первой страницы должен быть положительным.")
 
@@ -134,8 +158,11 @@ def build_toc_entries(
     entries: list[TocEntry] = []
     missing_xml_count = 0
     current_page = first_page
-    for result in pdf_results:
-        if not _is_toc_pdf(result, release_mode):
+    for result in sorted(
+        pdf_results,
+        key=lambda item: natural_path_key(item.relative_path),
+    ):
+        if not _is_toc_pdf(result, release_mode, toc_scope):
             continue
         if result.page_count <= 0:
             raise ValueError(
@@ -150,11 +177,21 @@ def build_toc_entries(
                 _normalised(Path(result.file_name).stem),
             )
         xml_title = title_map.get(key)
-        if not xml_title and not result.object_name:
+        if (
+            toc_scope == TOC_SCOPE_OBJECTS
+            and not xml_title
+            and not result.object_name
+        ):
             missing_xml_count += 1
         entries.append(
             TocEntry(
-                title=_entry_title(result, xml_title, release_mode),
+                title=_entry_title(
+                    result,
+                    xml_title,
+                    release_mode,
+                    toc_scope,
+                    settlement_title_format,
+                ),
                 page_count=result.page_count,
                 start_page=current_page,
                 source_path=result.full_path,
@@ -204,6 +241,44 @@ def _direct_children(element, local_name: str):
         and child.namespaceURI == WORD_NAMESPACE
         and child.localName == local_name
     ]
+
+
+def _settlement_title_format(template_path: str | Path) -> tuple[str, str]:
+    """Читает постоянные части строки общего PDF из примера в титульнике."""
+
+    try:
+        with ZipFile(template_path) as archive:
+            document = minidom.parseString(archive.read("word/document.xml"))
+        body = document.getElementsByTagNameNS(WORD_NAMESPACE, "body")[0]
+        paragraphs = _direct_children(body, "p")
+        heading_index = next(
+            index
+            for index, paragraph in enumerate(paragraphs)
+            if _paragraph_text(paragraph).strip().casefold() == "содержание"
+        )
+        example = next(
+            _paragraph_text(paragraph).strip()
+            for paragraph in paragraphs[heading_index + 1 :]
+            if _direct_children(paragraph, "r")
+            and _paragraph_text(paragraph).strip()
+        )
+    except (IndexError, KeyError, OSError, StopIteration, ValueError):
+        return _DEFAULT_SETTLEMENT_TITLE_PREFIX, ""
+
+    title = re.sub(r"\d+\s*$", "", example).strip()
+    prefix_match = re.search(r"^(.+?\bв\s+границах)", title, re.IGNORECASE)
+    suffix_match = re.search(
+        r"(муниципального\s+образования.+)$",
+        title,
+        re.IGNORECASE,
+    )
+    prefix = (
+        " ".join(prefix_match.group(1).split())
+        if prefix_match
+        else _DEFAULT_SETTLEMENT_TITLE_PREFIX
+    )
+    suffix = " ".join(suffix_match.group(1).split()) if suffix_match else ""
+    return prefix, suffix
 
 
 def _set_run_text(run, value: str):
@@ -403,6 +478,7 @@ def create_release_toc(
     xml_results: Iterable[XmlReleaseResult],
     release_mode: str,
     repaginate_with_word: bool = True,
+    toc_scope: str = TOC_SCOPE_OBJECTS,
 ) -> TocCreationResult:
     """Создаёт DOCX-оглавление и вычисляет страницы всех разделов."""
 
@@ -422,35 +498,61 @@ def create_release_toc(
     pdf_results = list(pdf_results)
     xml_results = list(xml_results)
     front_matter_pages = template_page_count(template)
-    entries, missing_xml_count = build_toc_entries(
-        pdf_results,
-        xml_results,
-        release_mode,
-        front_matter_pages + 1,
+    settlement_title_format = (
+        _settlement_title_format(template)
+        if toc_scope == TOC_SCOPE_SETTLEMENTS
+        else None
     )
-    _write_docx(template, output, entries)
+    with NamedTemporaryFile(
+        prefix=f".{output.stem}-working-",
+        suffix=".docx",
+        dir=output.parent,
+        delete=False,
+    ) as temporary:
+        working_output = Path(temporary.name)
 
-    repaginated = False
-    if repaginate_with_word:
-        actual_pages = _repaginate_with_word(output)
-        if actual_pages:
-            repaginated = True
-            if actual_pages != front_matter_pages:
+    def render_toc(page_count: int):
+        rendered_entries, missing_count = build_toc_entries(
+            pdf_results,
+            xml_results,
+            release_mode,
+            page_count + 1,
+            toc_scope,
+            settlement_title_format,
+        )
+        _write_docx(template, working_output, rendered_entries)
+        return rendered_entries, missing_count
+
+    try:
+        entries, missing_xml_count = render_toc(front_matter_pages)
+
+        repaginated = False
+        if repaginate_with_word:
+            for _ in range(10):
+                actual_pages = _repaginate_with_word(working_output)
+                if not actual_pages:
+                    raise RuntimeError(
+                        "Microsoft Word не смог определить число страниц "
+                        "созданного оглавления. Итоговый файл не сохранён."
+                    )
+                repaginated = True
+                if actual_pages == front_matter_pages:
+                    break
                 front_matter_pages = actual_pages
-                entries, missing_xml_count = build_toc_entries(
-                    pdf_results,
-                    xml_results,
-                    release_mode,
-                    front_matter_pages + 1,
+                entries, missing_xml_count = render_toc(front_matter_pages)
+            else:
+                raise RuntimeError(
+                    "Число страниц созданного оглавления не стабилизировалось."
                 )
-                _write_docx(template, output, entries)
-                _repaginate_with_word(output)
 
-    return TocCreationResult(
-        output_path=output,
-        entry_count=len(entries),
-        front_matter_pages=front_matter_pages,
-        total_pdf_pages=sum(entry.page_count for entry in entries),
-        missing_xml_count=missing_xml_count,
-        repaginated_with_word=repaginated,
-    )
+        os.replace(working_output, output)
+        return TocCreationResult(
+            output_path=output,
+            entry_count=len(entries),
+            front_matter_pages=front_matter_pages,
+            total_pdf_pages=sum(entry.page_count for entry in entries),
+            missing_xml_count=missing_xml_count,
+            repaginated_with_word=repaginated,
+        )
+    finally:
+        working_output.unlink(missing_ok=True)

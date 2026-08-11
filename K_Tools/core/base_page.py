@@ -5,13 +5,121 @@ from __future__ import annotations
 import traceback
 from collections.abc import Callable, Iterable
 
-from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal, Slot
+from PySide6.QtCore import (
+    QObject, QPoint, QRect, QRunnable, QSize, Qt, QThreadPool, Signal, Slot,
+)
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QListWidget, QMenu, QPlainTextEdit, QProgressBar, QPushButton, QSizePolicy,
-    QTableWidget, QVBoxLayout, QWidget,
+    QLayout, QTableWidget, QVBoxLayout, QWidget,
 )
+
+
+class FlowLayout(QLayout):
+    """Раскладывает элементы слева направо и переносит их на новую строку."""
+
+    def __init__(self, parent=None, margin=0, horizontal_spacing=10, vertical_spacing=10):
+        super().__init__(parent)
+        self._items = []
+        self._horizontal_spacing = horizontal_spacing
+        self._vertical_spacing = vertical_spacing
+        self.setContentsMargins(margin, margin, margin, margin)
+
+    def __del__(self):
+        while self.count():
+            self.takeAt(0)
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, index):
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index):
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._arrange(QRect(0, 0, width, 0), test_only=True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._arrange(rect, test_only=False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        margins = self.contentsMargins()
+        size += QSize(
+            margins.left() + margins.right(),
+            margins.top() + margins.bottom(),
+        )
+        parent = self.parentWidget()
+        if parent is not None and parent.width() > 0:
+            available = max(
+                1,
+                parent.width() - margins.left() - margins.right(),
+            )
+            flow_height = self._arrange(
+                QRect(0, 0, available, 0),
+                test_only=True,
+            )
+            size.setHeight(
+                max(size.height(), flow_height + margins.top() + margins.bottom())
+            )
+        return size
+
+    def _arrange(self, rect, test_only):
+        x = rect.x()
+        y = rect.y()
+        line_height = 0
+        right = rect.right()
+
+        for item in self._items:
+            hint = item.sizeHint().expandedTo(item.minimumSize())
+            next_x = x + hint.width() + self._horizontal_spacing
+            if line_height and next_x - self._horizontal_spacing > right + 1:
+                x = rect.x()
+                y += line_height + self._vertical_spacing
+                next_x = x + hint.width() + self._horizontal_spacing
+                line_height = 0
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), hint))
+            x = next_x
+            line_height = max(line_height, hint.height())
+
+        return y + line_height - rect.y()
+
+
+class FlowPanel(QWidget):
+    """Виджет, минимальная высота которого следует за переносами FlowLayout."""
+
+    def __init__(self, parent=None, horizontal_spacing=10, vertical_spacing=10):
+        super().__init__(parent)
+        self.flow_layout = FlowLayout(
+            self,
+            horizontal_spacing=horizontal_spacing,
+            vertical_spacing=vertical_spacing,
+        )
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        required = self.flow_layout.heightForWidth(event.size().width())
+        if required != self.minimumHeight():
+            self.setMinimumHeight(required)
 
 
 class TaskSignals(QObject):
@@ -143,7 +251,7 @@ class IndexSelector(QWidget):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        row = QHBoxLayout()
+        row = FlowLayout(horizontal_spacing=8, vertical_spacing=8)
         all_btn, none_btn = QPushButton("Выбрать все"), QPushButton("Снять все")
         all_btn.clicked.connect(self._select_all)
         none_btn.clicked.connect(self._deselect_all)
@@ -151,7 +259,6 @@ class IndexSelector(QWidget):
         row.addWidget(all_btn)
         row.addWidget(none_btn)
         row.addWidget(self.count_label)
-        row.addStretch()
         layout.addLayout(row)
         self.listbox = QListWidget()
         self.listbox.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
@@ -232,6 +339,7 @@ class BasePage(QWidget):
 
     def page_layout(self, title: str, subtitle: str = "") -> QVBoxLayout:
         root = QVBoxLayout(self)
+        self._page_root_layout = root
         root.setContentsMargins(28, 24, 28, 24)
         root.setSpacing(16)
         heading = QLabel(title)
@@ -243,6 +351,15 @@ class BasePage(QWidget):
             subheading.setWordWrap(True)
             root.addWidget(subheading)
         return root
+
+    def resizeEvent(self, event):
+        """Уменьшает внешние отступы страниц в узком окне."""
+        root = getattr(self, "_page_root_layout", None)
+        if root is not None:
+            horizontal = 16 if event.size().width() < 760 else 28
+            vertical = 16 if event.size().height() < 680 else 24
+            root.setContentsMargins(horizontal, vertical, horizontal, vertical)
+        super().resizeEvent(event)
 
     @staticmethod
     def card_layout(parent_layout, title: str = ""):

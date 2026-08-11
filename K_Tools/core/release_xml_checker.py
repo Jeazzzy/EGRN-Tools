@@ -10,6 +10,9 @@ import re
 import xml.etree.ElementTree as ElementTree
 from zipfile import BadZipFile, ZipFile
 
+from .settlement_names import settlement_key
+from .sorting import natural_path_key, natural_text_key
+
 
 STATUS_VALID = "Корректно"
 STATUS_INVALID = "Есть ошибки"
@@ -137,14 +140,7 @@ def _normalise_release_mode(release_mode: str) -> str:
 def _settlement_name(value: str) -> str:
     """Убирает распространённое обозначение вида НП перед его названием."""
 
-    cleaned = _clean_text(value).casefold().replace("ё", "е")
-    cleaned = re.sub(
-        r"^(?:(?:р\s*\.?\s*п)|г|п|с|д|пос|поселок|город|село|деревня)"
-        r"\.?\s+",
-        "",
-        cleaned,
-    )
-    return cleaned.strip(" .«»\"'")
+    return settlement_key(value)
 
 
 def locate_xml_folder(selected_folder: str | Path) -> Path:
@@ -189,7 +185,7 @@ def find_xml_archives(xml_folder: str | Path) -> list[Path]:
             for path in folder.rglob("*")
             if path.is_file() and path.suffix.casefold() == ".zip"
         ),
-        key=lambda path: tuple(part.casefold() for part in path.parts),
+        key=natural_path_key,
     )
 
 
@@ -478,7 +474,7 @@ def inspect_xml_archive(
                     if not member.is_dir()
                     and PurePosixPath(member.filename).suffix.casefold() == ".xml"
                 ),
-                key=lambda member: member.filename.casefold(),
+                key=lambda member: natural_text_key(member.filename),
             )
             if not xml_members:
                 return [

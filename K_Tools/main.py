@@ -14,6 +14,7 @@ if __name__ == "__main__" and "--build-self-test" in sys.argv:
 
     raise SystemExit(run_build_self_test(os.environ.get("K_TOOLS_SELF_TEST_REPORT")))
 
+from PySide6.QtCore import QEvent, QTimer, Qt
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -48,6 +49,42 @@ def resource_path(name: str) -> str:
     return os.path.join(base, name)
 
 
+class ResponsiveScrollArea(QScrollArea):
+    """Подгоняет страницу под окно и прокручивает только реальный избыток."""
+
+    def setWidget(self, widget):
+        previous = self.widget()
+        if previous is not None:
+            previous.removeEventFilter(self)
+        super().setWidget(widget)
+        if widget is not None:
+            widget.installEventFilter(self)
+        self._schedule_fit()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit_widget()
+
+    def eventFilter(self, watched, event):
+        if watched is self.widget() and event.type() == QEvent.Type.LayoutRequest:
+            self._schedule_fit()
+        return super().eventFilter(watched, event)
+
+    def _schedule_fit(self):
+        QTimer.singleShot(0, self._fit_widget)
+
+    def _fit_widget(self):
+        page = self.widget()
+        if page is None:
+            return
+        viewport = self.viewport().size()
+        minimum = page.minimumSizeHint()
+        page.resize(
+            max(viewport.width(), minimum.width()),
+            max(viewport.height(), minimum.height()),
+        )
+
+
 class Application(QMainWindow):
     def __init__(self, theme_manager: ThemeManager):
         super().__init__()
@@ -55,7 +92,7 @@ class Application(QMainWindow):
         self.setWindowTitle(
             f"K Tools {DISPLAY_VERSION} — Кадастровые инструменты"
         )
-        self.setMinimumSize(1050, 760)
+        self.setMinimumSize(760, 560)
         self.resize(1240, 860)
         icon_path = resource_path("icon.ico")
         if os.path.exists(icon_path):
@@ -68,18 +105,18 @@ class Application(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        sidebar = QFrame()
-        sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(235)
-        side_layout = QVBoxLayout(sidebar)
+        self.sidebar = QFrame()
+        self.sidebar.setObjectName("sidebar")
+        self.sidebar.setFixedWidth(235)
+        side_layout = QVBoxLayout(self.sidebar)
         side_layout.setContentsMargins(16, 22, 16, 18)
         side_layout.setSpacing(6)
         brand = QLabel("K Tools")
         brand.setObjectName("brand")
         side_layout.addWidget(brand)
-        subtitle = QLabel("Кадастровые инструменты")
-        subtitle.setObjectName("brandSub")
-        side_layout.addWidget(subtitle)
+        self.brand_subtitle = QLabel("Кадастровые инструменты")
+        self.brand_subtitle.setObjectName("brandSub")
+        side_layout.addWidget(self.brand_subtitle)
         side_layout.addSpacing(22)
 
         self.stack = QStackedWidget()
@@ -107,9 +144,10 @@ class Application(QMainWindow):
             side_layout.addWidget(button)
 
             page = page_class(controller=self)
-            scroll = QScrollArea()
-            scroll.setWidgetResizable(True)
+            scroll = ResponsiveScrollArea()
+            scroll.setWidgetResizable(False)
             scroll.setFrameShape(QFrame.Shape.NoFrame)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
             scroll.setWidget(page)
             self.stack.addWidget(scroll)
 
@@ -119,14 +157,27 @@ class Application(QMainWindow):
         self.theme_button.setMinimumHeight(40)
         self.theme_button.clicked.connect(self.theme_manager.toggle)
         side_layout.addWidget(self.theme_button)
-        version = QLabel(f"v {DISPLAY_VERSION}")
-        version.setObjectName("brandSub")
-        side_layout.addWidget(version)
+        self.version_label = QLabel(f"v {DISPLAY_VERSION}")
+        self.version_label.setObjectName("brandSub")
+        side_layout.addWidget(self.version_label)
         self.nav_buttons[0].setChecked(True)
-        layout.addWidget(sidebar)
+        layout.addWidget(self.sidebar)
         layout.addWidget(self.stack, 1)
         self.theme_manager.theme_changed.connect(self._on_theme_changed)
         self._on_theme_changed(self.theme_manager.theme.value)
+
+    def resizeEvent(self, event):
+        """Освобождает больше места инструментам в компактном окне."""
+        compact = event.size().width() < 1000
+        if event.size().width() < 850:
+            sidebar_width = 185
+        elif compact:
+            sidebar_width = 195
+        else:
+            sidebar_width = 235
+        self.sidebar.setFixedWidth(sidebar_width)
+        self.brand_subtitle.setVisible(not compact)
+        super().resizeEvent(event)
 
     def navigate_to(self, index: int):
         """Открывает инструмент и синхронизирует активный пункт навигации."""

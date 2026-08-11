@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from .sorting import natural_path_key
+
 
 STATUS_FOUND = "Найдена"
 STATUS_NOT_FOUND = "Не найдена"
@@ -134,7 +136,7 @@ def find_pdf_files(pdf_folder: str | Path) -> list[Path]:
             for path in folder.rglob("*")
             if path.is_file() and path.suffix.casefold() == ".pdf"
         ),
-        key=lambda path: tuple(part.casefold() for part in path.parts),
+        key=natural_path_key,
     )
 
 
