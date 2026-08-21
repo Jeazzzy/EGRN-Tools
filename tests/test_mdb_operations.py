@@ -134,6 +134,52 @@ class MdbTransactionTests(unittest.TestCase):
             self.assertEqual(result, "ok")
             self.assertIs(copy_runner.call_args.kwargs["copier"], safe_copier)
 
+    def test_fias_updates_locations_through_link_table_not_guid_parameter(self):
+        source_cursor = MagicMock()
+        source_cursor.description = [
+            ("ID",),
+            ("Code_FIAS",),
+            ("City_Name",),
+            ("Document_ID",),
+        ]
+        source_cursor.fetchall.return_value = [
+            ("SOURCE-ID", "FIAS-NEW", "Новый адрес", "SOURCE-DOCUMENT")
+        ]
+
+        target_cursor = MagicMock()
+        target_cursor.fetchall.side_effect = [
+            [("TARGET-ID",)],
+            [("TARGET-ID", "FIAS-NEW", "Новый адрес")],
+        ]
+        source_connection = MagicMock()
+        source_connection.cursor.return_value = source_cursor
+        target_connection = MagicMock()
+        target_connection.cursor.return_value = target_cursor
+        connections = iter((source_connection, target_connection))
+        page = SimpleNamespace(
+            _same_file=lambda *_: False,
+            _get_conn=lambda *_: next(connections),
+            _quote_identifier=MdbCopyPage._quote_identifier,
+        )
+
+        updated = MdbCopyPage._copy_locations_address(
+            page, "source.mdb", "target.mdb"
+        )
+
+        self.assertEqual(updated, 1)
+        update_calls = [
+            call for call in target_cursor.execute.call_args_list
+            if str(call.args[0]).startswith("UPDATE")
+        ]
+        self.assertEqual(len(update_calls), 1)
+        update_sql = update_calls[0].args[0]
+        self.assertIn("INNER JOIN [Местоположения_картаплан]", update_sql)
+        self.assertIn("L.[ID]=M.[Location_ID]", update_sql)
+        self.assertNotIn("WHERE [ID]=?", update_sql)
+        self.assertEqual(update_calls[0].args[1], ("FIAS-NEW", "Новый адрес"))
+        target_connection.commit.assert_called_once_with()
+        target_connection.rollback.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

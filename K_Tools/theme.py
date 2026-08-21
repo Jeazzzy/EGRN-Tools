@@ -219,6 +219,15 @@ QComboBox QAbstractItemView {
     selection-color: #ffffff;
     outline: none;
 }
+QSplitter#mdbContentSplitter::handle:vertical {
+    background: $border_strong;
+    height: 8px;
+    margin: 2px 36px;
+    border-radius: 2px;
+}
+QSplitter#mdbContentSplitter::handle:vertical:hover {
+    background: $accent;
+}
 QPushButton {
     background: $surface;
     color: $text;

@@ -8,11 +8,14 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
+    QListView,
     QMessageBox,
     QPushButton,
     QSizePolicy,
+    QSplitter,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -127,6 +130,17 @@ class TableComboBox(QComboBox):
             return
         super().keyPressEvent(event)
 
+    def showPopup(self):
+        """Ограничивает высоту popup-окна независимо от стиля Windows."""
+        super().showPopup()
+        view = self.view()
+        visible_rows = min(max(self.count(), 1), 12)
+        row_height = max(view.sizeHintForRow(0), view.fontMetrics().height() + 8)
+        popup_height = visible_rows * row_height + 8
+        view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        view.setMaximumHeight(popup_height)
+        view.window().setMaximumHeight(popup_height)
+
 
 class MdbCopyPage(BasePage):
     TYPE_GENITIVE = SETTLEMENT_TYPE_GENITIVE
@@ -138,36 +152,66 @@ class MdbCopyPage(BasePage):
             "Массовая замена файлов и таблиц Microsoft Access.",
         )
         root.setSpacing(12)
+        root.setAlignment(Qt.AlignmentFlag.AlignTop)
         if not PYODBC_AVAILABLE:
             warning = QLabel("pyodbc не установлен. Добавьте зависимость перед работой с MDB.")
             warning.setObjectName("warningBanner")
             root.addWidget(warning)
 
+        self.content_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.content_splitter.setObjectName("mdbContentSplitter")
+        self.content_splitter.setChildrenCollapsible(False)
+        self.content_splitter.setHandleWidth(8)
+        root.addWidget(self.content_splitter, 1)
+
+        controls = QWidget()
+        controls_layout = QVBoxLayout(controls)
+        controls_layout.setContentsMargins(0, 0, 0, 0)
+        controls_layout.setSpacing(12)
+
         self.tabs = QTabWidget()
-        root.addWidget(self.tabs)
+        controls_layout.addWidget(self.tabs)
         self._build_replace_mdb()
         self._build_vri()
         self._build_replace_table()
         self._build_fias()
         self._build_text()
-        self.tabs.currentChanged.connect(self._fit_current_tab)
-        self.run_btn = QPushButton("Запустить операцию")
-        self.run_btn.setProperty("primary", True)
-        self.run_btn.clicked.connect(self.run_operation)
-        root.addWidget(self.run_btn)
-        root.addWidget(self.setup_progress_bar())
-        log_card, logs = self.card_layout(root, "Журнал")
-        log_card.setSizePolicy(
+        self.tabs.setSizePolicy(
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Fixed,
         )
+        self.run_btn = QPushButton("Запустить операцию")
+        self.run_btn.setProperty("primary", True)
+        self.run_btn.clicked.connect(self.run_operation)
+        controls_layout.addWidget(self.run_btn)
+        controls_layout.addWidget(self.setup_progress_bar())
+        self.content_splitter.addWidget(controls)
+
+        log_card = QFrame()
+        log_card.setObjectName("card")
+        logs = QVBoxLayout(log_card)
+        log_card.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
         logs.setContentsMargins(14, 10, 14, 10)
         logs.setSpacing(5)
+        log_title = QLabel("Журнал")
+        log_title.setObjectName("cardTitle")
+        logs.addWidget(log_title)
         log_text = self.setup_log_area()
-        log_text.setMinimumHeight(48)
-        log_text.setMaximumHeight(64)
+        log_text.setMinimumHeight(96)
+        log_text.setMaximumHeight(16777215)
+        log_text.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
         logs.addWidget(log_text)
-        self._fit_current_tab()
+        self.content_splitter.addWidget(log_card)
+        self.content_splitter.setStretchFactor(0, 0)
+        self.content_splitter.setStretchFactor(1, 1)
+        self._fit_tabs()
+        self.content_splitter.setSizes([controls.sizeHint().height(), 180])
 
     @staticmethod
     def _tab():
@@ -176,6 +220,7 @@ class MdbCopyPage(BasePage):
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(14, 10, 14, 10)
         layout.setSpacing(7)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         return widget, layout
 
     @staticmethod
@@ -184,25 +229,27 @@ class MdbCopyPage(BasePage):
         note.setWordWrap(True)
         return note
 
-    def _fit_current_tab(self, *_):
-        """Отдаёт вкладке её полную высоту без внутренней полосы прокрутки."""
-        current = self.tabs.currentWidget()
-        if current is None:
+    def _fit_tabs(self):
+        """Держит все режимы MDB одной высоты и без внутренней прокрутки."""
+        if self.tabs.count() == 0:
             return
         available_width = max(320, self.tabs.width() - 8, self.width() - 64)
-        content_layout = current.layout()
-        if content_layout is not None and content_layout.hasHeightForWidth():
-            content_height = content_layout.heightForWidth(available_width)
-        else:
-            content_height = current.sizeHint().height()
-        height = content_height + self.tabs.tabBar().sizeHint().height() + 12
+        content_heights = []
+        for index in range(self.tabs.count()):
+            widget = self.tabs.widget(index)
+            content_layout = widget.layout()
+            if content_layout is not None and content_layout.hasHeightForWidth():
+                content_heights.append(content_layout.heightForWidth(available_width))
+            else:
+                content_heights.append(widget.sizeHint().height())
+        height = max(content_heights) + self.tabs.tabBar().sizeHint().height() + 12
         self.tabs.setFixedHeight(max(150, height))
         self.layout().invalidate()
         self.updateGeometry()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self._fit_current_tab()
+        self._fit_tabs()
 
     def _directory_row(self, layout, label, source_selector=None):
         layout.addWidget(self._note(label))
@@ -268,8 +315,9 @@ class MdbCopyPage(BasePage):
         layout.addWidget(QLabel("Имя таблицы"))
         row = QHBoxLayout()
         self.table_combo = TableComboBox()
+        self.table_combo.setView(QListView(self.table_combo))
         self.table_combo.setEditable(False)
-        self.table_combo.setMaxVisibleItems(24)
+        self.table_combo.setMaxVisibleItems(12)
         self.table_combo.setPlaceholderText("Выберите таблицу из списка")
         refresh = QPushButton("Обновить список")
         refresh.clicked.connect(self._load_tables)
@@ -508,32 +556,46 @@ class MdbCopyPage(BasePage):
             source_values = next(iter(variants))
 
             target_cursor.execute(
-                f"SELECT DISTINCT [Location_ID] FROM {link_table} "
-                "WHERE [Location_ID] IS NOT NULL"
+                f"SELECT DISTINCT M.[Location_ID] FROM {link_table} AS M "
+                f"INNER JOIN {locations} AS L ON L.[ID]=M.[Location_ID] "
+                "WHERE M.[Location_ID] IS NOT NULL"
             )
-            target_ids = [row[0] for row in target_cursor.fetchall()]
+            target_ids = {str(row[0]).casefold() for row in target_cursor.fetchall()}
             if not target_ids:
                 raise ValueError(
-                    "В target MDB нет ссылок Местоположения_картаплан.Location_ID"
+                    "В target MDB нет корректной связи "
+                    "Местоположения_картаплан.Location_ID → Locations.ID"
                 )
 
             assignments = ", ".join(
-                f"{self._quote_identifier(column)}=?" for column in copied_columns
+                f"L.{self._quote_identifier(column)}=?" for column in copied_columns
             )
-            update_sql = f"UPDATE {locations} SET {assignments} WHERE [ID]=?"
-            updated = 0
-            for location_id in target_ids:
-                target_cursor.execute(
-                    f"SELECT COUNT(*) FROM {locations} WHERE [ID]=?", location_id
-                )
-                if target_cursor.fetchone()[0] != 1:
-                    raise ValueError(
-                        f"Location_ID {location_id} не найден или неоднозначен в Locations"
+            update_sql = (
+                f"UPDATE {locations} AS L INNER JOIN {link_table} AS M "
+                f"ON L.[ID]=M.[Location_ID] SET {assignments}"
+            )
+            target_cursor.execute(update_sql, source_values)
+
+            selected_columns = ", ".join(
+                f"L.{self._quote_identifier(column)}" for column in copied_columns
+            )
+            target_cursor.execute(
+                f"SELECT L.[ID], {selected_columns} FROM {locations} AS L "
+                f"INNER JOIN {link_table} AS M ON L.[ID]=M.[Location_ID]"
+            )
+            verified_ids = set()
+            for row in target_cursor.fetchall():
+                verified_ids.add(str(row[0]).casefold())
+                if tuple(row[1:]) != source_values:
+                    raise RuntimeError(
+                        "Access не сохранил адрес в связанной строке Locations"
                     )
-                target_cursor.execute(update_sql, (*source_values, location_id))
-                updated += 1
+            if verified_ids != target_ids:
+                raise RuntimeError(
+                    "Не все связанные строки Locations удалось проверить после обновления"
+                )
             target_conn.commit()
-            return updated
+            return len(verified_ids)
         except Exception:
             if target_conn is not None:
                 target_conn.rollback()

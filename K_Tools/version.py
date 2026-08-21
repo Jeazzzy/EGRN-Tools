@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-APP_VERSION = "7.2.6"
+APP_VERSION = "7.2.8"
 RELEASE_CHANNEL = ""
 
 DISPLAY_VERSION = f"{APP_VERSION} {RELEASE_CHANNEL}".strip()
