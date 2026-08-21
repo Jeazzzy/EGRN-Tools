@@ -3,21 +3,26 @@
 from __future__ import annotations
 
 import os
+import re
 from decimal import Decimal
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
+    QFormLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QMenu,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QTabWidget,
     QTableWidgetItem,
@@ -38,6 +43,7 @@ from core.release_xlsx_exporter import export_release_results
 from core.release_toc_generator import (
     TOC_SCOPE_OBJECTS,
     TOC_SCOPE_SETTLEMENTS,
+    TocCoverData,
     create_release_toc,
 )
 from core.settlement_names import settlement_key
@@ -114,6 +120,149 @@ def _toc_xml_selection(
         and settlement_key(path.relative_to(xml_root).parts[0])
         == selected_settlement
     ]
+
+
+class TocCoverDialog(QDialog):
+    """Собирает только смысловые поля стандартного титульного листа."""
+
+    def __init__(self, release_mode, toc_scope, parent=None):
+        super().__init__(parent)
+        self.release_mode = release_mode
+        self.toc_scope = toc_scope
+        self.settings = QSettings("K Tools", "ReleaseToc")
+        self.settings_key = (
+            "settlements" if toc_scope == TOC_SCOPE_SETTLEMENTS else release_mode
+        )
+        self.setWindowTitle("Данные титульного листа")
+        self.setMinimumWidth(620)
+
+        layout = QVBoxLayout(self)
+        hint = QLabel(
+            "Оформление, расположение и шрифты K Tools создаст автоматически. "
+            "Проверьте только тексты титульного листа."
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        form = QFormLayout()
+        self.municipality_edit = PathEdit()
+        self.municipality_edit.setPlaceholderText(
+            "Например: «Город Саратов» Саратовской области"
+        )
+        self.municipality_edit.setText(
+            self.settings.value(f"{self.settings_key}/municipality", "")
+        )
+        form.addRow("Муниципальное образование:", self.municipality_edit)
+
+        self.title_edit = QPlainTextEdit()
+        self.title_edit.setMinimumHeight(105)
+        self.title_edit.setMaximumHeight(130)
+        saved_title = self.settings.value(f"{self.settings_key}/title", "")
+        self._last_auto_title = self._automatic_title(
+            self.municipality_edit.text()
+        )
+        if saved_title == self._legacy_automatic_title(
+            self.municipality_edit.text()
+        ):
+            saved_title = ""
+        self.title_edit.setPlainText(saved_title or self._last_auto_title)
+        form.addRow("Название документа:", self.title_edit)
+
+        self.volume_edit = PathEdit()
+        self.volume_edit.setPlaceholderText("Например: ТОМ 3 — можно оставить пустым")
+        self.volume_edit.setText(
+            self.settings.value(f"{self.settings_key}/volume", "")
+        )
+        form.addRow("Том:", self.volume_edit)
+        layout.addLayout(form)
+
+        self.municipality_edit.textChanged.connect(self._municipality_changed)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText(
+            "Создать титульник и оглавление"
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Отмена")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _automatic_title(self, municipality):
+        subject = (
+            "НАСЕЛЕННЫХ ПУНКТОВ"
+            if self.release_mode == RELEASE_MODE_NP
+            else "ТЕРРИТОРИАЛЬНЫХ ЗОН"
+        )
+        municipality = re.split(
+            r",?\s*утвержденн(?:ому|ый|ая|ое|ые|ым|ой)\b",
+            municipality,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0]
+        municipality = " ".join(municipality.split())
+        municipality = municipality or "[МУНИЦИПАЛЬНОЕ ОБРАЗОВАНИЕ]"
+        return (
+            f"СВЕДЕНИЯ О ГРАНИЦАХ {subject}, ВХОДЯЩИХ В СОСТАВ "
+            f"МУНИЦИПАЛЬНОГО ОБРАЗОВАНИЯ {municipality.upper()}"
+        )
+
+    def _legacy_automatic_title(self, municipality):
+        subject = (
+            "НАСЕЛЕННЫХ ПУНКТОВ"
+            if self.release_mode == RELEASE_MODE_NP
+            else "ТЕРРИТОРИАЛЬНЫХ ЗОН"
+        )
+        municipality = municipality.strip() or "[МУНИЦИПАЛЬНОЕ ОБРАЗОВАНИЕ]"
+        return (
+            f"СВЕДЕНИЯ О ГРАНИЦАХ {subject}, ВХОДЯЩИХ В СОСТАВ "
+            f"МУНИЦИПАЛЬНОГО ОБРАЗОВАНИЯ {municipality.upper()}"
+        )
+
+    def _municipality_changed(self, value):
+        current = self.title_edit.toPlainText().strip()
+        if current == self._last_auto_title:
+            self._last_auto_title = self._automatic_title(value)
+            self.title_edit.setPlainText(self._last_auto_title)
+        else:
+            self._last_auto_title = self._automatic_title(value)
+
+    def accept(self):
+        if not self.municipality_edit.text().strip():
+            QMessageBox.warning(
+                self,
+                "Не заполнено поле",
+                "Укажите муниципальное образование.",
+            )
+            return
+        if not self.title_edit.toPlainText().strip():
+            QMessageBox.warning(
+                self,
+                "Не заполнено поле",
+                "Укажите название документа.",
+            )
+            return
+        self.settings.setValue(
+            f"{self.settings_key}/municipality",
+            self.municipality_edit.text().strip(),
+        )
+        self.settings.setValue(
+            f"{self.settings_key}/title",
+            self.title_edit.toPlainText().strip(),
+        )
+        self.settings.setValue(
+            f"{self.settings_key}/volume",
+            self.volume_edit.text().strip(),
+        )
+        super().accept()
+
+    def cover_data(self):
+        return TocCoverData(
+            municipality=self.municipality_edit.text().strip(),
+            document_title=self.title_edit.toPlainText().strip(),
+            volume=self.volume_edit.text().strip(),
+        )
 
 
 class ReleaseCheckerPage(BasePage):
@@ -234,6 +383,38 @@ class ReleaseCheckerPage(BasePage):
                 TOC_SCOPE_SETTLEMENTS,
             )
         )
+        self.toc_menu.addSeparator()
+        custom_toc_menu = self.toc_menu.addMenu("По своему DOCX")
+        custom_with_xml_action = custom_toc_menu.addAction(
+            "По отдельным PDF (с XML)"
+        )
+        custom_with_xml_action.triggered.connect(
+            lambda checked=False: self.create_toc(
+                False,
+                TOC_SCOPE_OBJECTS,
+                True,
+            )
+        )
+        custom_without_xml_action = custom_toc_menu.addAction(
+            "По отдельным PDF (без XML)"
+        )
+        custom_without_xml_action.triggered.connect(
+            lambda checked=False: self.create_toc(
+                True,
+                TOC_SCOPE_OBJECTS,
+                True,
+            )
+        )
+        custom_settlements_action = custom_toc_menu.addAction(
+            "По общим PDF ТЗ для населённых пунктов"
+        )
+        custom_settlements_action.triggered.connect(
+            lambda checked=False: self.create_toc(
+                True,
+                TOC_SCOPE_SETTLEMENTS,
+                True,
+            )
+        )
         self.toc_button.setMenu(self.toc_menu)
         action_row.addWidget(self.check_button)
         action_row.addWidget(self.xml_check_button)
@@ -299,18 +480,16 @@ class ReleaseCheckerPage(BasePage):
         )
         self._configure_table(table)
         header = table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        for column, width in enumerate((180, 360, 120, 90, 170)):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
+            table.setColumnWidth(column, width)
         table.customContextMenuRequested.connect(
             lambda pos: self.show_table_menu(table, pos)
         )
         return table
 
     def _create_xml_table(self):
-        table = CopyTableWidget(0, 14)
+        table = CopyTableWidget(0, 16)
         table.setHorizontalHeaderLabels(
             [
                 "Папка НП",
@@ -318,23 +497,25 @@ class ReleaseCheckerPage(BasePage):
                 "ZIP",
                 "XML",
                 "Полное название объекта",
-                "Кадастровый округ",
+                "Кадастровый район",
                 "Индекс",
                 "НП в XML",
                 "Тип границы",
                 "Реестровый номер",
                 "Точек",
-                "Полигонов",
+                "Контуров всего",
+                "Внешних контуров",
+                "Внутренних (дырок)",
                 "Проверка точности",
                 "Статус",
             ]
         )
         self._configure_table(table)
         header = table.horizontalHeader()
-        for column in range(table.columnCount()):
-            header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        widths = (150, 130, 210, 210, 390, 170, 100, 170, 120, 190, 90, 130, 150, 160, 190, 150)
+        for column, width in enumerate(widths):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
+            table.setColumnWidth(column, width)
         table.customContextMenuRequested.connect(
             lambda pos: self.show_table_menu(table, pos)
         )
@@ -346,6 +527,9 @@ class ReleaseCheckerPage(BasePage):
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        header = table.horizontalHeader()
+        header.setSectionsMovable(True)
+        header.setStretchLastSection(False)
 
     def browse_folder(self):
         folder = QFileDialog.getExistingDirectory(
@@ -530,6 +714,8 @@ class ReleaseCheckerPage(BasePage):
                 result.registry_number,
                 result.point_count,
                 result.polygon_count,
+                result.outer_contour_count if result.outer_contour_count is not None else "—",
+                result.hole_count if result.hole_count is not None else "—",
                 result.accuracy_summary,
                 result.status,
             ]
@@ -601,71 +787,38 @@ class ReleaseCheckerPage(BasePage):
             f"Результаты сохранены: {saved_path}",
         )
 
-    def _find_toc_template(
-        self,
-        selected_folder,
-        toc_scope=TOC_SCOPE_OBJECTS,
-    ):
-        search_roots = [selected_folder]
-        if selected_folder.name.casefold() in {"pdf", "xml"}:
-            search_roots.append(selected_folder.parent)
-        elif selected_folder.parent.name.casefold() in {"pdf", "xml"}:
-            search_roots.append(selected_folder.parent.parent)
-
-        candidates = []
-        seen = set()
-        for root in search_roots:
-            for path in root.rglob("*.docx"):
-                resolved = path.resolve()
-                if resolved in seen:
-                    continue
-                seen.add(resolved)
-                candidates.append(path)
-        if toc_scope == TOC_SCOPE_SETTLEMENTS:
-            preferred = [
-                path
-                for path in candidates
-                if "том_нп" in path.stem.casefold()
-                or "том нп" in path.stem.casefold()
-            ]
-        else:
-            preferred = [
-                path
-                for path in candidates
-                if path.name.casefold() == "титульник для омг.docx"
-            ]
-        matches = preferred
-        if toc_scope == TOC_SCOPE_OBJECTS and not matches:
-            matches = [
-                path
-                for path in candidates
-                if "титульник" in path.stem.casefold()
-                or "оглавлен" in path.stem.casefold()
-            ]
-        if not matches:
-            return None
-        return sorted(matches, key=lambda path: str(path).casefold())[0]
-
     def create_toc(
         self,
         without_xml=False,
         toc_scope=TOC_SCOPE_OBJECTS,
+        custom_template=False,
     ):
         selected_folder = self._selected_folder()
         if selected_folder is None:
             return
 
-        template_path = self._find_toc_template(selected_folder, toc_scope)
-        if template_path is None:
+        template_path = None
+        cover = None
+        if custom_template:
             selected, _ = QFileDialog.getOpenFileName(
                 self,
-                "Выберите титульник с примером оглавления",
+                "Выберите свой титульник с примером оглавления",
                 str(selected_folder),
                 "Документ Word (*.docx)",
             )
             if not selected:
                 return
             template_path = Path(selected)
+        else:
+            effective_mode = (
+                RELEASE_MODE_TZ
+                if toc_scope == TOC_SCOPE_SETTLEMENTS
+                else self.release_mode_combo.currentData()
+            )
+            dialog = TocCoverDialog(effective_mode, toc_scope, self)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            cover = dialog.cover_data()
 
         release_root, _ = _toc_selection_context(selected_folder)
         if selected_folder.name.casefold() in {"pdf", "xml"}:
@@ -704,6 +857,7 @@ class ReleaseCheckerPage(BasePage):
             ),
             without_xml,
             toc_scope,
+            cover,
             on_result=self._toc_created,
             on_error=lambda text: self.show_error(text, "оглавления"),
             on_finished=lambda: self._set_check_buttons_enabled(True),
@@ -720,6 +874,7 @@ class ReleaseCheckerPage(BasePage):
         release_mode,
         without_xml,
         toc_scope,
+        cover=None,
     ):
         (
             pdf_folder,
@@ -770,15 +925,19 @@ class ReleaseCheckerPage(BasePage):
             xml_results,
             release_mode,
             toc_scope=toc_scope,
+            cover=cover,
         )
         signals.progress.emit(total, total)
         return result
 
     def _toc_created(self, result):
-        self.status_label.setText(
+        status = (
             f"Оглавление: {result.entry_count} разделов · "
             f"{result.total_pdf_pages} страниц PDF"
         )
+        if result.word_warning or not result.repaginated_with_word:
+            status += " · требуется проверка страниц"
+        self.status_label.setText(status)
         self.update_progress(1, 1)
         warning = ""
         if result.missing_xml_count:
@@ -786,11 +945,26 @@ class ReleaseCheckerPage(BasePage):
                 f"\n\nДля {result.missing_xml_count} PDF название не найдено "
                 f"ни в XML, ни на первой странице PDF — использовано имя файла."
             )
-        if not result.repaginated_with_word:
-            warning += (
-                "\n\nMicrosoft Word не выполнил перерасчёт страниц; использовано "
-                "число страниц, сохранённое в шаблоне."
+        if result.word_warning or not result.repaginated_with_word:
+            details = result.word_warning or "Microsoft Word COM недоступен."
+            QMessageBox.warning(
+                self,
+                "Оглавление сохранено — проверьте страницы",
+                f"Файл сохранён:\n{result.output_path}{warning}\n\n"
+                "Microsoft Word COM не выполнил надёжный перерасчёт страниц. "
+                "Результат создан по предварительной оценке или последнему "
+                "успешному расчёту и может быть некорректен.\n\n"
+                f"Причина:\n{details}\n\n"
+                "Что нужно сделать:\n"
+                "1. Откройте созданный DOCX в Microsoft Word.\n"
+                "2. Дождитесь полной разметки документа и посмотрите фактическое "
+                "число страниц в строке состояния Word.\n"
+                f"3. В расчёте использовано страниц оглавления: "
+                f"{result.front_matter_pages}. Если фактическое число отличается, "
+                "проверьте и исправьте начальные страницы разделов.\n"
+                "4. Для автоматического расчёта восстановите Microsoft Office/COM.",
             )
+            return
         QMessageBox.information(
             self,
             "Оглавление создано",

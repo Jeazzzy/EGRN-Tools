@@ -42,6 +42,8 @@ def xml_result(object_name="Территориальная зона ВИ1"):
         status=STATUS_VALID,
         details="",
         full_path=r"C:\release\xml\Вне НП\ВИ1\boundaries.zip",
+        outer_contour_count=1,
+        hole_count=1,
     )
 
 
@@ -69,7 +71,10 @@ class ReleaseXlsxExporterTests(unittest.TestCase):
             self.assertEqual(xml_sheet["E2"].value, "Территориальная зона ВИ1")
             self.assertEqual(xml_sheet["K2"].value, 7)
             self.assertEqual(xml_sheet["L2"].value, 2)
-            self.assertEqual(xml_sheet["P2"].value, STATUS_VALID)
+            self.assertEqual(xml_sheet["M2"].value, 1)
+            self.assertEqual(xml_sheet["N2"].value, 1)
+            self.assertEqual(xml_sheet["R2"].value, STATUS_VALID)
+            self.assertEqual(xml_sheet["F1"].value, "Кадастровый район")
 
     def test_exports_only_available_result_type(self):
         with TemporaryDirectory() as temporary:

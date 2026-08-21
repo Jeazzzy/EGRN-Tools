@@ -1,18 +1,17 @@
 import os
 import re
 import shutil
+import tempfile
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFileDialog,
-    QFrame,
     QHBoxLayout,
     QLabel,
     QMessageBox,
     QPushButton,
-    QScrollArea,
     QSizePolicy,
     QTabWidget,
     QVBoxLayout,
@@ -28,6 +27,105 @@ try:
 except ImportError:
     pyodbc = None
     PYODBC_AVAILABLE = False
+
+
+_ADMINISTRATIVE_TYPES = {
+    "с.п.": "сельского поселения",
+    "с.п": "сельского поселения",
+    "сельское поселение": "сельского поселения",
+    "г.п.": "городского поселения",
+    "г.п": "городского поселения",
+    "городское поселение": "городского поселения",
+    "г.о.": "городского округа",
+    "г.о": "городского округа",
+    "городской округ": "городского округа",
+    "м.о.": "муниципального округа",
+    "м.о": "муниципального округа",
+    "муниципальный округ": "муниципального округа",
+    "м.р-н": "муниципального района",
+    "м.р-н.": "муниципального района",
+    "муниципальный район": "муниципального района",
+}
+
+_LOCALITY_SPAN = re.compile(
+    r"(?P<prefix>\bв\s+границах\s+)"
+    r"(?P<locality>"
+    r"[^,;\r\n]*?(?:сельского|городского)\s+поселения"
+    r"|[^,;\r\n]*?(?:городского|муниципального)\s+округа"
+    r"|[^,;\r\n]*?(?=\s+муниципального\s+образования\b)"
+    r"|[^,;\r\n]*?(?=\s+[А-ЯЁ][А-ЯЁа-яё-]+\s+(?:муниципального\s+)?района\b)"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _normalise_type(value):
+    return " ".join(str(value or "").strip().casefold().replace("ё", "е").split())
+
+
+def _adjective_to_genitive(value):
+    """Склоняет типичные прилагательные в названиях МО."""
+    text = " ".join(str(value or "").split())
+    endings = (
+        ("ское", "ского"), ("цкое", "цкого"),
+        ("ое", "ого"), ("ее", "его"),
+        ("ский", "ского"), ("цкий", "цкого"),
+        ("ый", "ого"), ("ой", "ого"), ("ий", "его"),
+        ("ая", "ой"), ("яя", "ей"),
+    )
+    lowered = text.casefold()
+    for ending, replacement in endings:
+        if lowered.endswith(ending):
+            return text[:-len(ending)] + replacement
+    return text
+
+
+def _locality_phrase(name, kind):
+    name = " ".join(str(name or "").split())
+    kind_key = _normalise_type(kind)
+    administrative = _ADMINISTRATIVE_TYPES.get(kind_key)
+    if administrative:
+        return f"{_adjective_to_genitive(name)} {administrative}".strip()
+    genitive = SETTLEMENT_TYPE_GENITIVE.get(kind_key, str(kind or "").strip())
+    return f"{genitive} {name}".strip()
+
+
+def _replace_locality_text(value, name=None, kind=None, outside=False):
+    """Меняет только НП после «в границах», сохраняя район и регион."""
+    if not isinstance(value, str):
+        return value, False
+    match = _LOCALITY_SPAN.search(value)
+    if match is None:
+        return value, False
+    suffix = value[match.end():]
+    if outside:
+        replacement = "" if re.match(
+            r"\s+муниципального\s+образования\b", suffix, re.IGNORECASE
+        ) else "муниципального образования"
+    else:
+        replacement = _locality_phrase(name, kind)
+    new_value = value[:match.start("locality")] + replacement + value[match.end("locality"):]
+    return new_value, True
+
+
+class TableComboBox(QComboBox):
+    """Выпадающий список, который не меняет таблицу случайным колесом."""
+
+    def wheelEvent(self, event):
+        if self.view().isVisible():
+            super().wheelEvent(event)
+        else:
+            event.ignore()
+
+    def keyPressEvent(self, event):
+        if (
+            event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down)
+            and not self.view().isVisible()
+        ):
+            self.showPopup()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 class MdbCopyPage(BasePage):
@@ -61,28 +159,24 @@ class MdbCopyPage(BasePage):
         log_card, logs = self.card_layout(root, "Журнал")
         log_card.setSizePolicy(
             QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
         )
+        logs.setContentsMargins(14, 10, 14, 10)
+        logs.setSpacing(5)
         log_text = self.setup_log_area()
-        log_text.setMinimumHeight(100)
+        log_text.setMinimumHeight(48)
+        log_text.setMaximumHeight(64)
         logs.addWidget(log_text)
-        root.setStretch(root.indexOf(log_card), 1)
         self._fit_current_tab()
 
     @staticmethod
     def _tab():
-        """Вкладка с собственной прокруткой для компактной высоты окна."""
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
+        """Обычная вкладка: вся форма видна без внутренней прокрутки."""
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(16, 16, 16, 16)
-        scroll.setWidget(widget)
-        return scroll, layout
+        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setSpacing(7)
+        return widget, layout
 
     @staticmethod
     def _note(text):
@@ -91,14 +185,24 @@ class MdbCopyPage(BasePage):
         return note
 
     def _fit_current_tab(self, *_):
-        """Не оставляет пустой пол-экрана в коротких вкладках MDB."""
+        """Отдаёт вкладке её полную высоту без внутренней полосы прокрутки."""
         current = self.tabs.currentWidget()
         if current is None:
             return
-        height = current.sizeHint().height() + self.tabs.tabBar().sizeHint().height() + 20
-        self.tabs.setMaximumHeight(max(170, min(300, height)))
+        available_width = max(320, self.tabs.width() - 8, self.width() - 64)
+        content_layout = current.layout()
+        if content_layout is not None and content_layout.hasHeightForWidth():
+            content_height = content_layout.heightForWidth(available_width)
+        else:
+            content_height = current.sizeHint().height()
+        height = content_height + self.tabs.tabBar().sizeHint().height() + 12
+        self.tabs.setFixedHeight(max(150, height))
         self.layout().invalidate()
         self.updateGeometry()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit_current_tab()
 
     def _directory_row(self, layout, label, source_selector=None):
         layout.addWidget(self._note(label))
@@ -130,6 +234,7 @@ class MdbCopyPage(BasePage):
         note = self._note("Полностью заменяет target MDB файлом из папки соответствующего индекса.")
         layout.addWidget(note)
         self.replace_selector = IndexSelector()
+        self.replace_selector.listbox.setMaximumHeight(90)
         self.replace_source = self._directory_row(
             layout, "Source: папки-индексы с MDB", self.replace_selector
         )
@@ -145,6 +250,7 @@ class MdbCopyPage(BasePage):
         note = self._note("Копирует таблицу Utilizations_KP между MDB одинакового индекса.")
         layout.addWidget(note)
         self.vri_selector = IndexSelector()
+        self.vri_selector.listbox.setMaximumHeight(90)
         self.vri_source = self._directory_row(
             layout, "Source: папки-индексы с MDB", self.vri_selector
         )
@@ -161,8 +267,10 @@ class MdbCopyPage(BasePage):
         self.table_target = self._directory_row(layout, "Target: папка с MDB")
         layout.addWidget(QLabel("Имя таблицы"))
         row = QHBoxLayout()
-        self.table_combo = QComboBox()
-        self.table_combo.setEditable(True)
+        self.table_combo = TableComboBox()
+        self.table_combo.setEditable(False)
+        self.table_combo.setMaxVisibleItems(24)
+        self.table_combo.setPlaceholderText("Выберите таблицу из списка")
         refresh = QPushButton("Обновить список")
         refresh.clicked.connect(self._load_tables)
         row.addWidget(self.table_combo, 1)
@@ -172,7 +280,10 @@ class MdbCopyPage(BasePage):
 
     def _build_fias(self):
         tab, layout = self._tab()
-        layout.addWidget(self._note("Обновляет таблицу Locations во всех target MDB."))
+        layout.addWidget(self._note(
+            "Переносит адрес из связанной строки Locations во все target MDB, "
+            "сохраняя их ID, Document_ID и связи."
+        ))
         self.fias_source = self._file_row(layout, "Source MDB", self._pick_mdb)
         self.fias_target = self._directory_row(layout, "Target: папка с MDB")
         self.tabs.addTab(tab, "Адрес по ФИАС")
@@ -222,15 +333,18 @@ class MdbCopyPage(BasePage):
         if not os.path.isfile(path):
             QMessageBox.warning(self, "Внимание", "Сначала выберите MDB.")
             return
+        connection = None
         try:
             connection = self._get_conn(path)
             tables = [row.table_name for row in connection.cursor().tables(tableType="TABLE")]
-            connection.close()
             self.table_combo.clear()
             self.table_combo.addItems(tables)
             self.log(f"Загружено таблиц: {len(tables)}")
         except Exception as error:
             QMessageBox.critical(self, "Ошибка", str(error))
+        finally:
+            if connection is not None:
+                connection.close()
 
     @staticmethod
     def _get_conn(path):
@@ -242,77 +356,217 @@ class MdbCopyPage(BasePage):
     @staticmethod
     def _collect_source_by_index(root, selected):
         result = {}
-        for name in os.listdir(root):
+        for name in sorted(os.listdir(root), key=str.casefold):
             folder = os.path.join(root, name)
             if name not in selected or not os.path.isdir(folder):
                 continue
-            source = next(
-                (os.path.join(folder, item) for item in os.listdir(folder)
-                 if item.lower().endswith(".mdb")),
-                None,
-            )
-            if source:
-                result[name] = source
+            candidates = MdbCopyPage._collect_all_mdb(folder)
+            if len(candidates) > 1:
+                listed = "\n".join(f"  - {item}" for item in candidates)
+                raise ValueError(
+                    f"Для индекса {name} найдено несколько source MDB. "
+                    f"Оставьте один файл:\n{listed}"
+                )
+            if candidates:
+                result[name] = candidates[0]
         return result
 
     @staticmethod
     def _find_target_mdb_by_index(root, index_name):
         result = []
         for folder, _, files in os.walk(root):
-            if index_name in os.path.normpath(folder).split(os.sep):
+            parts = {part.casefold() for part in os.path.normpath(folder).split(os.sep)}
+            if index_name.casefold() in parts:
                 result.extend(
                     os.path.join(folder, name)
-                    for name in files if name.lower().endswith(".mdb")
+                    for name in sorted(files, key=str.casefold)
+                    if name.lower().endswith(".mdb")
                 )
-        return result
+        return sorted(result, key=str.casefold)
 
     @staticmethod
     def _collect_all_mdb(root):
-        return [
+        return sorted([
             os.path.join(folder, name)
             for folder, _, files in os.walk(root)
             for name in files if name.lower().endswith(".mdb")
-        ]
+        ], key=str.casefold)
+
+    @staticmethod
+    def _same_file(first, second):
+        try:
+            return os.path.samefile(first, second)
+        except (FileNotFoundError, OSError):
+            normalise = lambda value: os.path.normcase(os.path.realpath(value))
+            return normalise(first) == normalise(second)
+
+    @staticmethod
+    def _quote_identifier(value):
+        value = str(value or "")
+        if not value or "\x00" in value:
+            raise ValueError("Пустое или недопустимое имя таблицы/поля")
+        return f"[{value.replace(']', ']]')}]"
+
+    @staticmethod
+    def _replace_mdb_file(source, target):
+        if MdbCopyPage._same_file(source, target):
+            raise ValueError("Source и target указывают на один MDB")
+        target_dir = os.path.dirname(os.path.abspath(target))
+        descriptor, temporary = tempfile.mkstemp(
+            prefix=".ktools-mdb-", suffix=".tmp", dir=target_dir
+        )
+        os.close(descriptor)
+        try:
+            shutil.copy2(source, temporary)
+            if os.path.getsize(temporary) <= 0:
+                raise OSError("Скопированный MDB пуст")
+            os.replace(temporary, target)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
 
     def _copy_table(self, source, target, table):
-        source_conn, target_conn = self._get_conn(source), self._get_conn(target)
+        if self._same_file(source, target):
+            raise ValueError("Source и target указывают на один MDB")
+        source_conn = target_conn = None
         try:
+            source_conn = self._get_conn(source)
+            target_conn = self._get_conn(target)
             source_cursor, target_cursor = source_conn.cursor(), target_conn.cursor()
-            source_cursor.execute(f"SELECT * FROM [{table}]")
-            rows = source_cursor.fetchall()
-            columns = [description[0] for description in source_cursor.description]
-            target_cursor.execute(f"DELETE FROM [{table}]")
-            target_conn.commit()
-            if rows:
-                names = ", ".join(f"[{name}]" for name in columns)
-                placeholders = ", ".join("?" for _ in columns)
-                target_cursor.executemany(
-                    f"INSERT INTO [{table}] ({names}) VALUES ({placeholders})", rows
+            quoted_table = self._quote_identifier(table)
+            source_cursor.execute(f"SELECT * FROM {quoted_table}")
+            source_columns = [description[0] for description in source_cursor.description]
+            target_cursor.execute(f"SELECT * FROM {quoted_table} WHERE 1=0")
+            target_columns = [description[0] for description in target_cursor.description]
+            if [item.casefold() for item in source_columns] != [
+                item.casefold() for item in target_columns
+            ]:
+                raise ValueError(
+                    f"Схемы таблицы {table} различаются: "
+                    f"source полей {len(source_columns)}, target полей {len(target_columns)}"
                 )
-                target_conn.commit()
+
+            names = ", ".join(self._quote_identifier(name) for name in target_columns)
+            placeholders = ", ".join("?" for _ in target_columns)
+            insert_sql = f"INSERT INTO {quoted_table} ({names}) VALUES ({placeholders})"
+            target_cursor.execute(f"DELETE FROM {quoted_table}")
+            while True:
+                rows = source_cursor.fetchmany(500)
+                if not rows:
+                    break
+                target_cursor.executemany(insert_sql, rows)
+            target_conn.commit()
+        except Exception:
+            if target_conn is not None:
+                target_conn.rollback()
+            raise
         finally:
-            source_conn.close()
-            target_conn.close()
+            if source_conn is not None:
+                source_conn.close()
+            if target_conn is not None:
+                target_conn.close()
+
+    def _copy_locations_address(self, source, target):
+        """Переносит адрес, не ломая target Location_ID и Document_ID."""
+        if self._same_file(source, target):
+            raise ValueError("Source и target указывают на один MDB")
+        source_conn = target_conn = None
+        link_table = self._quote_identifier("Местоположения_картаплан")
+        locations = self._quote_identifier("Locations")
+        try:
+            source_conn = self._get_conn(source)
+            target_conn = self._get_conn(target)
+            source_cursor = source_conn.cursor()
+            target_cursor = target_conn.cursor()
+            source_cursor.execute(
+                f"SELECT L.* FROM {locations} AS L "
+                f"INNER JOIN {link_table} AS M ON L.[ID]=M.[Location_ID]"
+            )
+            columns = [description[0] for description in source_cursor.description]
+            source_rows = source_cursor.fetchall()
+            if not source_rows:
+                raise ValueError(
+                    "В source MDB нет адреса Locations, связанного через "
+                    "Местоположения_картаплан.Location_ID"
+                )
+
+            preserved = {"id", "document_id", "insert_date"}
+            copied_columns = [
+                column for column in columns
+                if str(column).strip().casefold() not in preserved
+            ]
+            indexes = {column: columns.index(column) for column in copied_columns}
+            variants = {
+                tuple(row[indexes[column]] for column in copied_columns)
+                for row in source_rows
+            }
+            if len(variants) != 1:
+                raise ValueError(
+                    "В source MDB найдено несколько разных связанных адресов. "
+                    "Оставьте один адрес-источник."
+                )
+            source_values = next(iter(variants))
+
+            target_cursor.execute(
+                f"SELECT DISTINCT [Location_ID] FROM {link_table} "
+                "WHERE [Location_ID] IS NOT NULL"
+            )
+            target_ids = [row[0] for row in target_cursor.fetchall()]
+            if not target_ids:
+                raise ValueError(
+                    "В target MDB нет ссылок Местоположения_картаплан.Location_ID"
+                )
+
+            assignments = ", ".join(
+                f"{self._quote_identifier(column)}=?" for column in copied_columns
+            )
+            update_sql = f"UPDATE {locations} SET {assignments} WHERE [ID]=?"
+            updated = 0
+            for location_id in target_ids:
+                target_cursor.execute(
+                    f"SELECT COUNT(*) FROM {locations} WHERE [ID]=?", location_id
+                )
+                if target_cursor.fetchone()[0] != 1:
+                    raise ValueError(
+                        f"Location_ID {location_id} не найден или неоднозначен в Locations"
+                    )
+                target_cursor.execute(update_sql, (*source_values, location_id))
+                updated += 1
+            target_conn.commit()
+            return updated
+        except Exception:
+            if target_conn is not None:
+                target_conn.rollback()
+            raise
+        finally:
+            if source_conn is not None:
+                source_conn.close()
+            if target_conn is not None:
+                target_conn.close()
 
     def _get_locality(self, path):
         connection = self._get_conn(path)
         try:
             cursor = connection.cursor()
-            cursor.execute("SELECT * FROM [Locations]")
+            cursor.execute(
+                "SELECT L.* FROM [Locations] AS L "
+                "INNER JOIN [Местоположения_картаплан] AS M "
+                "ON L.[ID]=M.[Location_ID]"
+            )
             columns = [description[0] for description in cursor.description]
-            row = cursor.fetchone()
-            if row is None:
-                return None, None
-            values = dict(zip(columns, row))
-            name = values.get("City_Name") or values.get("city_name")
-            kind = values.get("City_Type") or values.get("city_type")
-            if not name or not kind:
-                name = values.get("Locality_Name") or values.get("locality_name")
-                kind = values.get("Locality_Type") or values.get("locality_type")
-            if not name or not kind:
-                return None, None
-            kind = self.TYPE_GENITIVE.get(str(kind).strip().lower(), str(kind).strip())
-            return str(name).strip(), kind
+            for row in cursor.fetchall():
+                values = {
+                    str(column).strip().casefold(): value
+                    for column, value in zip(columns, row)
+                }
+                name = values.get("city_name")
+                kind = values.get("city_type")
+                if not name or not kind:
+                    name = values.get("locality_name")
+                    kind = values.get("locality_type")
+                if name and kind:
+                    return str(name).strip(), str(kind).strip()
+            return None, None
         finally:
             connection.close()
 
@@ -322,31 +576,36 @@ class MdbCopyPage(BasePage):
             cursor = connection.cursor()
             cursor.execute("SELECT * FROM [Титульный_картаплан]")
             columns = [description[0] for description in cursor.description]
-            if "Объект_ЗУ" not in columns:
-                return 0
-            primary = columns[0]
-            pattern = re.compile(
-                r"в\s+границах\s+.*?муниципального(?:\s+образования)?",
-                re.IGNORECASE | re.DOTALL,
-            )
-            replacement = (
-                "в границах муниципального образования"
-                if outside else f"в границах {kind} {name} муниципального образования"
-            )
+            by_key = {str(column).strip().casefold(): column for column in columns}
+            field = by_key.get("объект_зу")
+            if field is None:
+                raise ValueError(
+                    "В таблице Титульный_картаплан нет поля Объект_ЗУ"
+                )
+            primary = by_key.get("id", columns[0])
+            matched = False
             for row in cursor.fetchall():
                 values = dict(zip(columns, row))
-                old = values.get("Объект_ЗУ")
-                if isinstance(old, str):
-                    new = pattern.sub(replacement, old)
-                    if new != old:
-                        cursor.execute(
-                            f"UPDATE [Титульный_картаплан] "
-                            f"SET [Объект_ЗУ]=? WHERE [{primary}]=?",
-                            (new, values[primary]),
-                        )
-                        updated += 1
+                old = values.get(field)
+                new, found = _replace_locality_text(old, name, kind, outside)
+                matched = matched or found
+                if found and new != old:
+                    cursor.execute(
+                        f"UPDATE {self._quote_identifier('Титульный_картаплан')} "
+                        f"SET {self._quote_identifier(field)}=? "
+                        f"WHERE {self._quote_identifier(primary)}=?",
+                        (new, values[primary]),
+                    )
+                    updated += 1
+            if not matched:
+                raise ValueError(
+                    "В Объект_ЗУ не найден поддерживаемый фрагмент после «в границах»"
+                )
             connection.commit()
             return updated
+        except Exception:
+            connection.rollback()
+            raise
         finally:
             connection.close()
 
@@ -378,6 +637,8 @@ class MdbCopyPage(BasePage):
         else:
             params = (self.text_folder.text().strip(), self.text_outside.isChecked())
         self.clear_log()
+        if self.progress_bar is not None:
+            self.progress_bar.setValue(0)
         self.run_btn.setEnabled(False)
         self.start_task(
             self._execute,
@@ -396,23 +657,47 @@ class MdbCopyPage(BasePage):
             if not selected:
                 raise ValueError("Выберите хотя бы один индекс")
             sources = self._collect_source_by_index(source_root, selected)
-            if not sources:
-                raise ValueError("SOURCE MDB не найдены по выбранным индексам")
+            missing = sorted(selected.difference(sources), key=str.casefold)
+            if missing:
+                raise ValueError(
+                    "SOURCE MDB не найдены для индексов: " + ", ".join(missing)
+                )
+            jobs = []
+            without_targets = []
+            for index, source in sorted(sources.items(), key=lambda item: item[0].casefold()):
+                targets = [
+                    target for target in self._find_target_mdb_by_index(target_root, index)
+                    if not self._same_file(source, target)
+                ]
+                if not targets:
+                    without_targets.append(index)
+                jobs.append((index, source, targets))
+            if without_targets:
+                raise ValueError(
+                    "Target MDB не найдены для индексов: "
+                    + ", ".join(without_targets)
+                )
             changed = 0
-            for position, (index, source) in enumerate(sorted(sources.items()), 1):
-                targets = self._find_target_mdb_by_index(target_root, index)
+            failed = 0
+            for position, (index, source, targets) in enumerate(jobs, 1):
                 signals.message.emit(f"Индекс {index}: target файлов — {len(targets)}")
                 for target in targets:
                     try:
                         if mode == 0:
-                            shutil.copy2(source, target)
+                            self._replace_mdb_file(source, target)
                         else:
                             self._copy_table(source, target, "Utilizations_KP")
                         changed += 1
                         signals.message.emit(f"  OK: {target}")
                     except Exception as error:
+                        failed += 1
                         signals.message.emit(f"  Ошибка: {target}: {error}")
                 signals.progress.emit(position, len(sources))
+            if failed:
+                raise RuntimeError(
+                    f"Операция выполнена частично: успешно {changed}, ошибок {failed}. "
+                    "Подробности — в журнале."
+                )
             return f"Операция завершена. Обновлено: {changed}"
 
         if mode == 2:
@@ -421,7 +706,7 @@ class MdbCopyPage(BasePage):
                 raise ValueError("Проверьте source MDB, target папку и имя таблицы")
             targets = [
                 item for item in self._collect_all_mdb(target_root)
-                if os.path.abspath(item) != os.path.abspath(source)
+                if not self._same_file(item, source)
             ]
             return self._copy_to_targets(signals, source, targets, table)
 
@@ -431,9 +716,12 @@ class MdbCopyPage(BasePage):
                 raise ValueError("Проверьте source MDB и target папку")
             targets = [
                 item for item in self._collect_all_mdb(target_root)
-                if os.path.abspath(item) != os.path.abspath(source)
+                if not self._same_file(item, source)
             ]
-            return self._copy_to_targets(signals, source, targets, "Locations")
+            return self._copy_to_targets(
+                signals, source, targets, "адрес Locations",
+                copier=self._copy_locations_address,
+            )
 
         folder, outside = params
         if not os.path.isdir(folder):
@@ -442,6 +730,7 @@ class MdbCopyPage(BasePage):
         if not files:
             raise ValueError("MDB-файлы не найдены")
         total_updated = 0
+        failed = 0
         for position, path in enumerate(files, 1):
             try:
                 if outside:
@@ -456,22 +745,37 @@ class MdbCopyPage(BasePage):
                 total_updated += updated
                 signals.message.emit(f"{os.path.basename(path)}: обновлено строк {updated}")
             except Exception as error:
+                failed += 1
                 signals.message.emit(f"{path}: {error}")
             signals.progress.emit(position, len(files))
+        if failed:
+            raise RuntimeError(
+                f"Адрес обновлён частично: строк {total_updated}, ошибок MDB {failed}. "
+                "Подробности — в журнале."
+            )
         return f"Операция завершена. Обновлено строк: {total_updated}"
 
-    def _copy_to_targets(self, signals, source, targets, table):
+    def _copy_to_targets(self, signals, source, targets, table, copier=None):
         if not targets:
             raise ValueError("Target MDB-файлы не найдены")
+        copier = copier or (lambda source_path, target_path: self._copy_table(
+            source_path, target_path, table
+        ))
         changed = 0
+        failed = 0
         for position, target in enumerate(targets, 1):
             try:
-                self._copy_table(source, target, table)
+                copier(source, target)
                 changed += 1
                 signals.message.emit(f"OK: {target}")
             except Exception as error:
+                failed += 1
                 signals.message.emit(f"Ошибка: {target}: {error}")
             signals.progress.emit(position, len(targets))
+        if failed:
+            raise RuntimeError(
+                f"{table}: успешно {changed}, ошибок {failed}. Подробности — в журнале."
+            )
         return f"Таблица {table} обновлена в {changed} MDB"
 
     def _show_error(self, text):

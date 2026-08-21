@@ -106,6 +106,31 @@ def make_np_xml(
     """.encode("utf-8")
 
 
+def make_geometry_xml(rings):
+    spatial_elements = []
+    for ring in rings:
+        ordinates = "".join(
+            _point(position, "0.1", METHOD_CARTOMETRIC).replace(
+                "</EnSpa:ordinate>",
+                f"<EnSpa:x>{x}</EnSpa:x><EnSpa:y>{y}</EnSpa:y></EnSpa:ordinate>",
+            )
+            for position, (x, y) in enumerate(ring, 1)
+        )
+        spatial_elements.append(
+            f"<EnSpa:spatial_element><EnSpa:ordinates>{ordinates}"
+            "</EnSpa:ordinates></EnSpa:spatial_element>"
+        )
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+    <Root xmlns:iBND="urn:test:interact-boundaries"
+          xmlns:EnSpa="urn:test:spatial">
+      <iBND:name_object>Территориальная зона ВИ1</iBND:name_object>
+      <iBND:cadastral_district>23:01</iBND:cadastral_district>
+      <iBND:index>ВИ1</iBND:index>
+      <EnSpa:spatial_data>{''.join(spatial_elements)}</EnSpa:spatial_data>
+    </Root>
+    """.encode("utf-8")
+
+
 def archive_path(root, zone="ВИ1"):
     return root / "xml" / "Вне НП" / zone / "boundaries.zip"
 
@@ -235,6 +260,48 @@ class ParseXmlReleaseTests(unittest.TestCase):
 
             self.assertEqual(result.accuracy_error_count, 0)
             self.assertEqual(result.status, STATUS_VALID)
+
+    def test_counts_nested_ring_as_hole_and_keeps_total_contours(self):
+        outer = [(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)]
+        hole = [(2, 2), (4, 2), (4, 4), (2, 4), (2, 2)]
+        with TemporaryDirectory() as temporary:
+            result = parse_xml_release(
+                make_geometry_xml([outer, hole]),
+                archive_path(Path(temporary)),
+                "boundaries.xml",
+                "0.1",
+            )
+
+        self.assertEqual(result.polygon_count, 2)
+        self.assertEqual(result.outer_contour_count, 1)
+        self.assertEqual(result.hole_count, 1)
+
+    def test_counts_disjoint_rings_as_two_outer_contours(self):
+        first = [(0, 0), (2, 0), (2, 2), (0, 2), (0, 0)]
+        second = [(5, 5), (7, 5), (7, 7), (5, 7), (5, 5)]
+        with TemporaryDirectory() as temporary:
+            result = parse_xml_release(
+                make_geometry_xml([first, second]),
+                archive_path(Path(temporary)),
+                "boundaries.xml",
+                "0.1",
+            )
+
+        self.assertEqual(result.polygon_count, 2)
+        self.assertEqual(result.outer_contour_count, 2)
+        self.assertEqual(result.hole_count, 0)
+
+    def test_leaves_hole_classification_unknown_without_coordinates(self):
+        with TemporaryDirectory() as temporary:
+            result = parse_xml_release(
+                make_xml(),
+                archive_path(Path(temporary)),
+                "boundaries.xml",
+                "0.1",
+            )
+
+        self.assertIsNone(result.outer_contour_count)
+        self.assertIsNone(result.hole_count)
 
     def test_mixed_tablet_mode_rejects_other_cartometric_accuracy(self):
         values = [

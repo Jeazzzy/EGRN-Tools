@@ -65,6 +65,8 @@ class XmlReleaseResult:
     status: str
     details: str
     full_path: str
+    outer_contour_count: int | None = None
+    hole_count: int | None = None
 
 
 def _local_name(tag: str) -> str:
@@ -189,18 +191,16 @@ def find_xml_archives(xml_folder: str | Path) -> list[Path]:
     )
 
 
-def _polygon_point_counts(
+def _leaf_spatial_elements(
     root: ElementTree.Element,
     namespace_uri: str | None = None,
-) -> list[int]:
-    """Возвращает число ``num_geopoint`` в каждом ``spatial_element``."""
-
+) -> list[ElementTree.Element]:
     spatial_elements = [
         element
         for element in root.iter()
         if _matches_tag(element, "spatial_element", namespace_uri)
     ]
-    leaf_elements = [
+    return [
         element
         for element in spatial_elements
         if not any(
@@ -209,6 +209,15 @@ def _polygon_point_counts(
             for descendant in element.iter()
         )
     ]
+
+
+def _polygon_point_counts(
+    root: ElementTree.Element,
+    namespace_uri: str | None = None,
+) -> list[int]:
+    """Возвращает число ``num_geopoint`` в каждом ``spatial_element``."""
+
+    leaf_elements = _leaf_spatial_elements(root, namespace_uri)
     counts = [
         sum(
             1
@@ -227,6 +236,88 @@ def _polygon_point_counts(
         if _matches_tag(element, "num_geopoint", namespace_uri)
     )
     return [total] if total else []
+
+
+def _coordinate_rings(
+    root: ElementTree.Element,
+    namespace_uri: str | None = None,
+) -> list[list[tuple[float, float]]] | None:
+    """Читает замкнутые контуры; ``None`` означает нехватку координат для классификации."""
+
+    rings: list[list[tuple[float, float]]] = []
+    elements = _leaf_spatial_elements(root, namespace_uri)
+    if not elements:
+        return None
+
+    for element in elements:
+        points: list[tuple[float, float]] = []
+        for ordinate in element.iter():
+            if not _matches_tag(ordinate, "ordinate", namespace_uri):
+                continue
+            values = {
+                name.casefold(): value
+                for name, value in _direct_texts(ordinate, namespace_uri).items()
+            }
+            x_text = (
+                values.get("x")
+                or values.get("x_coord")
+                or values.get("x_coordinate")
+            )
+            y_text = (
+                values.get("y")
+                or values.get("y_coord")
+                or values.get("y_coordinate")
+            )
+            if not x_text or not y_text:
+                return None
+            try:
+                points.append(
+                    (float(_as_decimal(x_text)), float(_as_decimal(y_text)))
+                )
+            except ValueError:
+                return None
+
+        if len(points) > 1 and points[0] == points[-1]:
+            points.pop()
+        if len(set(points)) < 3:
+            return None
+        rings.append(points)
+
+    return rings if len(rings) == len(elements) else None
+
+
+def _contour_counts(
+    root: ElementTree.Element,
+    namespace_uri: str | None = None,
+) -> tuple[int | None, int | None]:
+    """Считает внешние контуры и дырки по чётности глубины вложения колец."""
+
+    rings = _coordinate_rings(root, namespace_uri)
+    if not rings:
+        return None, None
+
+    try:
+        from shapely.geometry import Polygon
+
+        polygons = [Polygon(ring) for ring in rings]
+    except (ImportError, ValueError):
+        return None, None
+    if any(
+        polygon.is_empty or not polygon.is_valid or polygon.area == 0
+        for polygon in polygons
+    ):
+        return None, None
+
+    holes = 0
+    for index, polygon in enumerate(polygons):
+        depth = sum(
+            polygon.within(container) and not polygon.equals(container)
+            for other_index, container in enumerate(polygons)
+            if other_index != index
+        )
+        if depth % 2:
+            holes += 1
+    return len(polygons) - holes, holes
 
 
 def _accuracy_records(
@@ -388,8 +479,9 @@ def parse_xml_release(
         )
     polygon_counts = _polygon_point_counts(root, spatial_namespace)
     polygon_count = len(polygon_counts)
+    outer_contour_count, hole_count = _contour_counts(root, spatial_namespace)
     # Первый и последний geopoint каждого контура описывают одну и ту же
-    # замыкающую точку, поэтому один тег на полигон не входит в итог.
+    # замыкающую точку, поэтому один тег на контур не входит в итог.
     point_count = sum(max(0, count - 1) for count in polygon_counts)
     checked_points, accuracy_issues = _validate_accuracy(
         root,
@@ -452,6 +544,8 @@ def parse_xml_release(
         accuracy_summary=accuracy_summary,
         status=STATUS_VALID if not issues else STATUS_INVALID,
         details="\n".join(issues),
+        outer_contour_count=outer_contour_count,
+        hole_count=hole_count,
     )
 
 

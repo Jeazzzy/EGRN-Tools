@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+from html import escape
 import os
 from pathlib import Path, PurePath
 import re
@@ -51,6 +52,15 @@ class TocEntry:
 
 
 @dataclass(frozen=True)
+class TocCoverData:
+    """Тексты стандартного титульного листа K Tools."""
+
+    municipality: str
+    document_title: str
+    volume: str = ""
+
+
+@dataclass(frozen=True)
 class TocCreationResult:
     """Результат формирования DOCX."""
 
@@ -60,6 +70,159 @@ class TocCreationResult:
     total_pdf_pages: int
     missing_xml_count: int
     repaginated_with_word: bool
+    word_warning: str = ""
+
+
+@dataclass(frozen=True)
+class WordRepaginationResult:
+    """Результат переразметки DOCX через установленный Microsoft Word."""
+
+    pages: int | None
+    error: str = ""
+
+
+def _word_text_runs(value: str, *, bold: bool = False, size: int = 28) -> str:
+    """Формирует OOXML runs, сохраняя пользовательские переносы строк."""
+
+    properties = (
+        "<w:rPr><w:rFonts w:ascii=\"Times New Roman\" "
+        "w:hAnsi=\"Times New Roman\" w:eastAsia=\"Times New Roman\"/>"
+        f"<w:sz w:val=\"{size}\"/><w:szCs w:val=\"{size}\"/>"
+        f"{'<w:b/><w:bCs/>' if bold else ''}</w:rPr>"
+    )
+    parts = []
+    for index, line in enumerate(value.splitlines() or [""]):
+        if index:
+            parts.append("<w:r><w:br/></w:r>")
+        parts.append(
+            f"<w:r>{properties}<w:t xml:space=\"preserve\">"
+            f"{escape(line)}</w:t></w:r>"
+        )
+    return "".join(parts)
+
+
+def _estimated_standard_pages(entries: list[TocEntry]) -> int:
+    """Грубая страховочная оценка страниц при недоступном Word COM."""
+
+    line_count = sum(max(1, (len(entry.title) + 82) // 83) for entry in entries)
+    return 1 + max(1, (line_count + 24) // 25)
+
+
+def _write_standard_template(
+    path: Path,
+    cover: TocCoverData,
+    pages: int,
+):
+    """Создаёт автономный DOCX в утверждённом стандартном оформлении."""
+
+    appendix = (
+        "Приложение\n"
+        "к единому документу\n"
+        "территориального планирования и\n"
+        "градостроительного зонирования\n"
+        "муниципального образования\n"
+        f"{cover.municipality.strip()}"
+    )
+    volume = cover.volume.strip()
+    volume_paragraph = (
+        "<w:p><w:pPr><w:jc w:val=\"center\"/><w:spacing w:before=\"432\"/>"
+        "<w:keepNext/></w:pPr>"
+        f"{_word_text_runs(volume, bold=True, size=32)}</w:p>"
+        if volume
+        else ""
+    )
+    document = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="{WORD_NAMESPACE}">
+  <w:body>
+    <w:p>
+      <w:pPr><w:jc w:val="right"/><w:spacing w:after="0"/><w:keepNext/></w:pPr>
+      {_word_text_runs(appendix)}
+    </w:p>
+    <w:p>
+      <w:pPr><w:jc w:val="center"/><w:spacing w:before="2800" w:after="432"/>
+        <w:keepNext/></w:pPr>
+      {_word_text_runs(cover.document_title.strip(), bold=True, size=32)}
+    </w:p>
+    {volume_paragraph}
+    <w:p>
+      <w:pPr><w:jc w:val="center"/><w:keepNext/></w:pPr>
+      <w:r><w:br w:type="page"/></w:r>
+      <w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/>
+        <w:b/><w:bCs/><w:sz w:val="28"/><w:szCs w:val="28"/>
+      </w:rPr><w:t>Содержание</w:t></w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>
+        <w:tabs><w:tab w:val="right" w:leader="dot" w:pos="9355"/></w:tabs>
+        <w:spacing w:before="120" w:after="120"/><w:contextualSpacing/>
+        <w:ind w:left="-142" w:hanging="654"/><w:jc w:val="both"/>
+      </w:pPr>
+      {_word_text_runs("Строка оглавления", size=27)}
+      <w:r><w:tab/></w:r>
+      {_word_text_runs("2", size=27)}
+    </w:p>
+    <w:sectPr>
+      <w:pgSz w:w="11906" w:h="16838"/>
+      <w:pgMar w:top="1134" w:right="850" w:bottom="1134" w:left="1701"
+        w:header="708" w:footer="708" w:gutter="0"/>
+    </w:sectPr>
+  </w:body>
+</w:document>'''.encode("utf-8")
+    content_types = b'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+  <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
+  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
+</Types>'''
+    relationships = b'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
+</Relationships>'''
+    document_relationships = b'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
+</Relationships>'''
+    styles = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="{WORD_NAMESPACE}">
+  <w:docDefaults>
+    <w:rPrDefault><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="Times New Roman"/><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr></w:rPrDefault>
+    <w:pPrDefault><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr></w:pPrDefault>
+  </w:docDefaults>
+  <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Обычный"/></w:style>
+</w:styles>'''.encode("utf-8")
+    numbering = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:numbering xmlns:w="{WORD_NAMESPACE}">
+  <w:abstractNum w:abstractNumId="0">
+    <w:multiLevelType w:val="singleLevel"/>
+    <w:lvl w:ilvl="0">
+      <w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/>
+      <w:lvlJc w:val="left"/>
+      <w:pPr><w:ind w:left="1080" w:hanging="720"/></w:pPr>
+      <w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/>
+        <w:sz w:val="27"/><w:szCs w:val="27"/></w:rPr>
+    </w:lvl>
+  </w:abstractNum>
+  <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
+</w:numbering>'''.encode("utf-8")
+    app = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="{APP_NAMESPACE}">
+  <Application>K Tools</Application><Pages>{max(1, pages)}</Pages>
+</Properties>'''.encode("utf-8")
+
+    with ZipFile(path, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types)
+        archive.writestr("_rels/.rels", relationships)
+        archive.writestr("word/_rels/document.xml.rels", document_relationships)
+        archive.writestr("word/document.xml", document)
+        archive.writestr("word/styles.xml", styles)
+        archive.writestr("word/numbering.xml", numbering)
+        archive.writestr("docProps/app.xml", app)
 
 
 def _is_toc_pdf(
@@ -424,13 +587,16 @@ def _write_docx(
         temporary_path.unlink(missing_ok=True)
 
 
-def _repaginate_with_word(document_path: Path) -> int | None:
-    """Возвращает реальное число страниц через Word COM, если Word доступен."""
+def _repaginate_with_word(document_path: Path) -> WordRepaginationResult:
+    """Переразмечает DOCX через Word, не смешивая расчёт и ошибку закрытия."""
 
     script = r"""
 $ErrorActionPreference = 'Stop'
 $word = $null
 $document = $null
+$pages = $null
+$primaryError = $null
+$cleanupErrors = @()
 try {
     $word = New-Object -ComObject Word.Application
     $word.Visible = $false
@@ -439,11 +605,28 @@ try {
     $document.Repaginate()
     $pages = $document.ComputeStatistics(2)
     $document.Save()
-    Write-Output $pages
+}
+catch {
+    $primaryError = $_.Exception.Message
 }
 finally {
-    if ($null -ne $document) { $document.Close(0) }
-    if ($null -ne $word) { $word.Quit() }
+    if ($null -ne $document) {
+        try { $document.Close(0) }
+        catch { $cleanupErrors += "Не удалось закрыть документ Word: $($_.Exception.Message)" }
+    }
+    if ($null -ne $word) {
+        try { $word.Quit() }
+        catch { $cleanupErrors += "Не удалось завершить Word: $($_.Exception.Message)" }
+    }
+}
+if ($null -ne $pages) {
+    Write-Output "KTOOLS_PAGES=$pages"
+}
+if (-not [string]::IsNullOrWhiteSpace($primaryError)) {
+    Write-Output "KTOOLS_ERROR=$primaryError"
+}
+foreach ($cleanupError in $cleanupErrors) {
+    Write-Output "KTOOLS_WARNING=$cleanupError"
 }
 """
     environment = os.environ.copy()
@@ -465,41 +648,98 @@ finally {
             timeout=90,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-        pages = int(completed.stdout.strip().splitlines()[-1])
-        return pages if pages > 0 else None
-    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
-        return None
+        lines = [line.strip() for line in completed.stdout.splitlines()]
+        page_line = next(
+            (line for line in lines if line.startswith("KTOOLS_PAGES=")),
+            "",
+        )
+        error_lines = [
+            line.split("=", 1)[1]
+            for line in lines
+            if line.startswith(("KTOOLS_ERROR=", "KTOOLS_WARNING="))
+        ]
+        pages = int(page_line.split("=", 1)[1]) if page_line else None
+        return WordRepaginationResult(
+            pages=pages if pages and pages > 0 else None,
+            error="; ".join(error_lines),
+        )
+    except subprocess.TimeoutExpired:
+        return WordRepaginationResult(
+            None,
+            "Microsoft Word не ответил за 90 секунд.",
+        )
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError) as error:
+        return WordRepaginationResult(None, str(error))
 
 
 def create_release_toc(
-    template_path: str | Path,
+    template_path: str | Path | None,
     output_path: str | Path,
     pdf_results: Iterable[PdfAreaResult],
     xml_results: Iterable[XmlReleaseResult],
     release_mode: str,
     repaginate_with_word: bool = True,
     toc_scope: str = TOC_SCOPE_OBJECTS,
+    cover: TocCoverData | None = None,
 ) -> TocCreationResult:
     """Создаёт DOCX-оглавление и вычисляет страницы всех разделов."""
 
-    template = Path(template_path)
     output = Path(output_path)
-    if not template.is_file():
-        raise ValueError("Шаблон оглавления Word не найден.")
-    if template.suffix.casefold() != ".docx":
-        raise ValueError("Шаблон оглавления должен быть файлом DOCX.")
     if output.suffix.casefold() != ".docx":
         output = output.with_suffix(".docx")
     if not output.parent.is_dir():
         raise ValueError("Папка для сохранения оглавления не существует.")
-    if template.resolve() == output.resolve():
-        raise ValueError("Нельзя перезаписывать исходный шаблон оглавления.")
 
     pdf_results = list(pdf_results)
     xml_results = list(xml_results)
+    standard_template = None
+    if template_path is None:
+        if cover is None or not cover.municipality.strip():
+            raise ValueError("Укажите муниципальное образование для титульника.")
+        if not cover.document_title.strip():
+            raise ValueError("Укажите название титульного листа.")
+        settlement_format = (
+            _DEFAULT_SETTLEMENT_TITLE_PREFIX,
+            f"муниципального образования {cover.municipality.strip()}",
+        )
+        preliminary_entries, _ = build_toc_entries(
+            pdf_results,
+            xml_results,
+            release_mode,
+            2,
+            toc_scope,
+            settlement_format,
+        )
+        with NamedTemporaryFile(
+            prefix=".k-tools-standard-toc-",
+            suffix=".docx",
+            dir=output.parent,
+            delete=False,
+        ) as temporary:
+            standard_template = Path(temporary.name)
+        _write_standard_template(
+            standard_template,
+            cover,
+            _estimated_standard_pages(preliminary_entries),
+        )
+        template = standard_template
+    else:
+        template = Path(template_path)
+        if not template.is_file():
+            raise ValueError("Шаблон оглавления Word не найден.")
+        if template.suffix.casefold() != ".docx":
+            raise ValueError("Шаблон оглавления должен быть файлом DOCX.")
+        if template.resolve() == output.resolve():
+            raise ValueError("Нельзя перезаписывать исходный шаблон оглавления.")
+
     front_matter_pages = template_page_count(template)
     settlement_title_format = (
-        _settlement_title_format(template)
+        (
+            _DEFAULT_SETTLEMENT_TITLE_PREFIX,
+            f"муниципального образования {cover.municipality.strip()}",
+        )
+        if cover is not None and toc_scope == TOC_SCOPE_SETTLEMENTS
+        else _settlement_title_format(template)
         if toc_scope == TOC_SCOPE_SETTLEMENTS
         else None
     )
@@ -527,22 +767,28 @@ def create_release_toc(
         entries, missing_xml_count = render_toc(front_matter_pages)
 
         repaginated = False
+        word_warning = ""
         if repaginate_with_word:
             for _ in range(10):
-                actual_pages = _repaginate_with_word(working_output)
+                word_result = _repaginate_with_word(working_output)
+                actual_pages = word_result.pages
                 if not actual_pages:
-                    raise RuntimeError(
-                        "Microsoft Word не смог определить число страниц "
-                        "созданного оглавления. Итоговый файл не сохранён."
+                    word_warning = (
+                        word_result.error
+                        or "Microsoft Word COM не смог определить число страниц."
                     )
+                    break
                 repaginated = True
+                if word_result.error:
+                    word_warning = word_result.error
                 if actual_pages == front_matter_pages:
                     break
                 front_matter_pages = actual_pages
                 entries, missing_xml_count = render_toc(front_matter_pages)
             else:
-                raise RuntimeError(
-                    "Число страниц созданного оглавления не стабилизировалось."
+                word_warning = (
+                    "Microsoft Word пересчитал документ, но число страниц "
+                    "не стабилизировалось после 10 попыток."
                 )
 
         os.replace(working_output, output)
@@ -553,6 +799,9 @@ def create_release_toc(
             total_pdf_pages=sum(entry.page_count for entry in entries),
             missing_xml_count=missing_xml_count,
             repaginated_with_word=repaginated,
+            word_warning=word_warning,
         )
     finally:
         working_output.unlink(missing_ok=True)
+        if standard_template is not None:
+            standard_template.unlink(missing_ok=True)

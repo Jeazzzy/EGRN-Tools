@@ -7,12 +7,19 @@ from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QSettings
+from PySide6.QtWidgets import QApplication, QHeaderView
 
 from core.release_checker import PdfAreaResult, STATUS_FOUND
-from core.release_toc_generator import TOC_SCOPE_OBJECTS, TOC_SCOPE_SETTLEMENTS
+from core.release_toc_generator import (
+    TOC_SCOPE_OBJECTS,
+    TOC_SCOPE_SETTLEMENTS,
+    TocCreationResult,
+)
+from core.release_xml_checker import RELEASE_MODE_TZ
 from pages.release_checker import (
     ReleaseCheckerPage,
+    TocCoverDialog,
     _toc_pdf_selection,
     _toc_xml_selection,
 )
@@ -23,6 +30,76 @@ class ReleaseCheckerPageTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
+    def test_standard_cover_dialog_builds_title_from_municipality(self):
+        settings = QSettings("K Tools", "ReleaseToc")
+        settings.clear()
+        dialog = TocCoverDialog(
+            RELEASE_MODE_TZ,
+            TOC_SCOPE_SETTLEMENTS,
+        )
+        try:
+            dialog.municipality_edit.setText(
+                "«Город Саратов» Саратовской области"
+            )
+            dialog.volume_edit.setText("ТОМ 3")
+            cover = dialog.cover_data()
+
+            self.assertIn(
+                "МУНИЦИПАЛЬНОГО ОБРАЗОВАНИЯ «ГОРОД САРАТОВ»",
+                cover.document_title,
+            )
+            self.assertEqual(cover.volume, "ТОМ 3")
+        finally:
+            dialog.close()
+            settings.clear()
+
+    def test_release_tables_allow_moving_and_resizing_columns(self):
+        page = ReleaseCheckerPage()
+        try:
+            for table in (page.table, page.xml_table):
+                header = table.horizontalHeader()
+                self.assertTrue(header.sectionsMovable())
+                self.assertTrue(
+                    all(
+                        header.sectionResizeMode(column)
+                        == QHeaderView.ResizeMode.Interactive
+                        for column in range(table.columnCount())
+                    )
+                )
+            headers = [
+                page.xml_table.horizontalHeaderItem(column).text()
+                for column in range(page.xml_table.columnCount())
+            ]
+            self.assertIn("Кадастровый район", headers)
+            self.assertIn("Контуров всего", headers)
+            self.assertIn("Внутренних (дырок)", headers)
+        finally:
+            page.close()
+
+    def test_cover_title_omits_approval_clause_and_manual_line_breaks(self):
+        dialog = TocCoverDialog(
+            RELEASE_MODE_TZ,
+            TOC_SCOPE_OBJECTS,
+        )
+        try:
+            title = dialog._automatic_title(
+                "сельского поселения Голубая Нива\n"
+                "Славянского района\n"
+                "Краснодарского края,\n"
+                "утвержденному решением Совета муниципального образования"
+            )
+
+            self.assertNotIn("УТВЕРЖДЕННОМУ", title)
+            self.assertNotIn("\n", title)
+            self.assertTrue(
+                title.endswith(
+                    "СЕЛЬСКОГО ПОСЕЛЕНИЯ ГОЛУБАЯ НИВА "
+                    "СЛАВЯНСКОГО РАЙОНА КРАСНОДАРСКОГО КРАЯ"
+                )
+            )
+        finally:
+            dialog.close()
+
     def test_toc_menu_routes_all_three_modes(self):
         page = ReleaseCheckerPage()
         try:
@@ -30,14 +107,16 @@ class ReleaseCheckerPageTests(unittest.TestCase):
             actions = page.toc_menu.actions()
 
             self.assertEqual(
-                [action.text() for action in actions],
+                [action.text() for action in actions[:3]],
                 [
                     "По отдельным PDF (с XML)",
                     "По отдельным PDF (без XML)",
                     "По общим PDF ТЗ для населённых пунктов",
                 ],
             )
-            for action in actions:
+            self.assertTrue(actions[3].isSeparator())
+            self.assertEqual(actions[4].text(), "По своему DOCX")
+            for action in actions[:3]:
                 action.trigger()
             self.app.processEvents()
 
@@ -47,6 +126,18 @@ class ReleaseCheckerPageTests(unittest.TestCase):
                     unittest.mock.call(False, TOC_SCOPE_OBJECTS),
                     unittest.mock.call(True, TOC_SCOPE_OBJECTS),
                     unittest.mock.call(True, TOC_SCOPE_SETTLEMENTS),
+                ],
+            )
+
+            for action in actions[4].menu().actions():
+                action.trigger()
+            self.app.processEvents()
+            self.assertEqual(
+                page.create_toc.call_args_list[-3:],
+                [
+                    unittest.mock.call(False, TOC_SCOPE_OBJECTS, True),
+                    unittest.mock.call(True, TOC_SCOPE_OBJECTS, True),
+                    unittest.mock.call(True, TOC_SCOPE_SETTLEMENTS, True),
                 ],
             )
         finally:
@@ -71,6 +162,33 @@ class ReleaseCheckerPageTests(unittest.TestCase):
             self.assertTrue(
                 all(button.geometry().bottom() < action_panel.height() for button in buttons)
             )
+        finally:
+            page.close()
+
+    def test_toc_com_failure_always_shows_manual_page_check_warning(self):
+        page = ReleaseCheckerPage()
+        result = TocCreationResult(
+            output_path=Path("C:/release/Оглавление.docx"),
+            entry_count=2,
+            front_matter_pages=3,
+            total_pdf_pages=10,
+            missing_xml_count=0,
+            repaginated_with_word=False,
+            word_warning="TYPE_E_ELEMENTNOTFOUND: COM-интерфейс Word не найден.",
+        )
+        try:
+            with (
+                patch("pages.release_checker.QMessageBox.warning") as warning,
+                patch("pages.release_checker.QMessageBox.information") as information,
+            ):
+                page._toc_created(result)
+
+            information.assert_not_called()
+            message = warning.call_args.args[2]
+            self.assertIn("может быть некорректен", message)
+            self.assertIn("COM-интерфейс Word не найден", message)
+            self.assertIn("Откройте созданный DOCX", message)
+            self.assertIn("использовано страниц оглавления: 3", message)
         finally:
             page.close()
 

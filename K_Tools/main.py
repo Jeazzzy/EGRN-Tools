@@ -37,7 +37,6 @@ from pages import (
     ReleaseCheckerPage,
     TzSplitterPage,
     XmlExtractorPage,
-    XmlIndexCheckerPage,
     ZipProcessorPage,
 )
 from theme import Theme, ThemeManager
@@ -128,7 +127,6 @@ class Application(QMainWindow):
             ("Исправление MIF", MifProjectionPage),
             ("Работа с MDB", MdbCopyPage),
             ("Разделение ТЗ", TzSplitterPage),
-            ("Анализ XML", XmlIndexCheckerPage),
             ("Проверка выпуска", ReleaseCheckerPage),
         ]
         buttons = QButtonGroup(self)

@@ -8,7 +8,10 @@ from zipfile import ZipFile
 from core.release_checker import PdfAreaResult, STATUS_FOUND
 from core.release_toc_generator import (
     TOC_SCOPE_SETTLEMENTS,
+    TocCoverData,
     WORD_NAMESPACE,
+    WordRepaginationResult,
+    _repaginate_with_word,
     build_toc_entries,
     create_release_toc,
 )
@@ -294,7 +297,141 @@ class TocEntriesTests(unittest.TestCase):
 
 
 class CreateTocTests(unittest.TestCase):
-    def test_word_failure_does_not_replace_existing_output(self):
+    def test_creates_complete_standard_document_without_user_template(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "Оглавление.docx"
+            result = create_release_toc(
+                None,
+                output,
+                [
+                    pdf_result(
+                        "Вне НП",
+                        "ВИ1.pdf",
+                        r"Вне НП\ВИ1.pdf",
+                        3,
+                        "ВИ1. Зона виноградников",
+                    )
+                ],
+                [],
+                RELEASE_MODE_TZ,
+                repaginate_with_word=False,
+                cover=TocCoverData(
+                    municipality="«Город Саратов» Саратовской области",
+                    document_title=(
+                        "СВЕДЕНИЯ О ГРАНИЦАХ ТЕРРИТОРИАЛЬНЫХ ЗОН, "
+                        "ВХОДЯЩИХ В СОСТАВ МУНИЦИПАЛЬНОГО ОБРАЗОВАНИЯ "
+                        "«ГОРОД САРАТОВ»"
+                    ),
+                    volume="ТОМ 3",
+                ),
+            )
+
+            self.assertTrue(output.is_file())
+            self.assertEqual(result.entry_count, 1)
+            with ZipFile(output) as archive:
+                names = set(archive.namelist())
+                document = ElementTree.fromstring(archive.read("word/document.xml"))
+            self.assertIn("[Content_Types].xml", names)
+            self.assertIn("word/styles.xml", names)
+            text = "\n".join(
+                "".join(element.itertext())
+                for element in document.findall(
+                    f".//{{{WORD_NAMESPACE}}}body/{{{WORD_NAMESPACE}}}p"
+                )
+            )
+            self.assertIn("Приложение", text)
+            self.assertIn("«Город Саратов» Саратовской области", text)
+            self.assertIn("ТОМ 3", text)
+            self.assertIn("Содержание", text)
+            self.assertIn("ВИ1. Зона виноградников", text)
+            self.assertFalse(list(root.glob(".k-tools-standard-toc-*.docx")))
+
+            paragraphs = document.findall(
+                f".//{{{WORD_NAMESPACE}}}body/{{{WORD_NAMESPACE}}}p"
+            )
+            heading = paragraphs[-2]
+            entry = paragraphs[-1]
+            heading_run_properties = heading.find(
+                f"{{{WORD_NAMESPACE}}}r/{{{WORD_NAMESPACE}}}rPr"
+            )
+            self.assertIsNone(
+                heading_run_properties.find(f"{{{WORD_NAMESPACE}}}spacing")
+            )
+            entry_properties = entry.find(f"{{{WORD_NAMESPACE}}}pPr")
+            entry_spacing = entry_properties.find(f"{{{WORD_NAMESPACE}}}spacing")
+            self.assertEqual(entry_spacing.get(f"{{{WORD_NAMESPACE}}}before"), "120")
+            self.assertEqual(entry_spacing.get(f"{{{WORD_NAMESPACE}}}after"), "120")
+            self.assertIsNotNone(
+                entry_properties.find(f"{{{WORD_NAMESPACE}}}contextualSpacing")
+            )
+            tabs = entry_properties.findall(
+                f"{{{WORD_NAMESPACE}}}tabs/{{{WORD_NAMESPACE}}}tab"
+            )
+            self.assertEqual(len(tabs), 1)
+            self.assertEqual(
+                tabs[0].get(f"{{{WORD_NAMESPACE}}}leader"),
+                "dot",
+            )
+            self.assertEqual(
+                tabs[-1].get(f"{{{WORD_NAMESPACE}}}pos"),
+                "9355",
+            )
+            run_size = entry.find(
+                f"{{{WORD_NAMESPACE}}}r/{{{WORD_NAMESPACE}}}rPr/"
+                f"{{{WORD_NAMESPACE}}}sz"
+            )
+            self.assertEqual(run_size.get(f"{{{WORD_NAMESPACE}}}val"), "27")
+
+    def test_missing_word_com_uses_template_pages_and_saves_document(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            template = root / "Титульник.docx"
+            output = root / "Оглавление.docx"
+            make_template(template, pages=2)
+
+            with patch(
+                "core.release_toc_generator._repaginate_with_word",
+                return_value=WordRepaginationResult(
+                    None,
+                    "TYPE_E_ELEMENTNOTFOUND: COM-интерфейс Word не найден.",
+                ),
+            ):
+                result = create_release_toc(
+                    template,
+                    output,
+                    [
+                        pdf_result(
+                            "Вне НП",
+                            "ВИ1.pdf",
+                            r"Вне НП\ВИ1.pdf",
+                            3,
+                        )
+                    ],
+                    [],
+                    RELEASE_MODE_TZ,
+                )
+
+            self.assertTrue(output.is_file())
+            self.assertFalse(result.repaginated_with_word)
+            self.assertEqual(result.front_matter_pages, 2)
+            self.assertIn("TYPE_E_ELEMENTNOTFOUND", result.word_warning)
+
+    def test_word_quit_error_does_not_discard_successful_page_count(self):
+        completed = unittest.mock.Mock(
+            stdout=(
+                "KTOOLS_PAGES=4\n"
+                "KTOOLS_WARNING=Не удалось завершить Word: "
+                "TYPE_E_ELEMENTNOTFOUND\n"
+            )
+        )
+        with patch("core.release_toc_generator.subprocess.run", return_value=completed):
+            result = _repaginate_with_word(Path("C:/release/Оглавление.docx"))
+
+        self.assertEqual(result.pages, 4)
+        self.assertIn("TYPE_E_ELEMENTNOTFOUND", result.error)
+
+    def test_word_failure_saves_fallback_and_reports_warning(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             template = root / "Титульник.docx"
@@ -304,25 +441,33 @@ class CreateTocTests(unittest.TestCase):
 
             with patch(
                 "core.release_toc_generator._repaginate_with_word",
-                side_effect=[3, None],
+                side_effect=[
+                    WordRepaginationResult(3),
+                    WordRepaginationResult(
+                        None,
+                        "COM-интерфейс Word не найден.",
+                    ),
+                ],
             ):
-                with self.assertRaisesRegex(RuntimeError, "не смог определить"):
-                    create_release_toc(
-                        template,
-                        output,
-                        [
-                            pdf_result(
-                                "Вне НП",
-                                "ВИ1.pdf",
-                                r"Вне НП\ВИ1.pdf",
-                                3,
-                            )
-                        ],
-                        [],
-                        RELEASE_MODE_TZ,
-                    )
+                result = create_release_toc(
+                    template,
+                    output,
+                    [
+                        pdf_result(
+                            "Вне НП",
+                            "ВИ1.pdf",
+                            r"Вне НП\ВИ1.pdf",
+                            3,
+                        )
+                    ],
+                    [],
+                    RELEASE_MODE_TZ,
+                )
 
-            self.assertEqual(output.read_bytes(), b"existing document")
+            self.assertNotEqual(output.read_bytes(), b"existing document")
+            self.assertTrue(output.is_file())
+            self.assertTrue(result.repaginated_with_word)
+            self.assertIn("COM-интерфейс", result.word_warning)
             self.assertFalse(list(root.glob(".*-working-*.docx")))
 
     def test_recalculates_again_until_created_document_page_count_is_stable(self):
@@ -334,7 +479,11 @@ class CreateTocTests(unittest.TestCase):
 
             with patch(
                 "core.release_toc_generator._repaginate_with_word",
-                side_effect=[3, 4, 4],
+                side_effect=[
+                    WordRepaginationResult(3),
+                    WordRepaginationResult(4),
+                    WordRepaginationResult(4),
+                ],
             ) as repaginate:
                 result = create_release_toc(
                     template,
