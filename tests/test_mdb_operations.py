@@ -132,7 +132,13 @@ class MdbTransactionTests(unittest.TestCase):
             )
 
             self.assertEqual(result, "ok")
-            self.assertIs(copy_runner.call_args.kwargs["copier"], safe_copier)
+            copier = copy_runner.call_args.kwargs["copier"]
+            copier("source.mdb", "target.mdb")
+            safe_copier.assert_called_once_with(
+                "source.mdb",
+                "target.mdb",
+                repair_missing_links=False,
+            )
 
     def test_fias_updates_locations_through_link_table_not_guid_parameter(self):
         source_cursor = MagicMock()
@@ -148,6 +154,7 @@ class MdbTransactionTests(unittest.TestCase):
 
         target_cursor = MagicMock()
         target_cursor.fetchall.side_effect = [
+            [("TARGET-ID",)],
             [("TARGET-ID",)],
             [("TARGET-ID", "FIAS-NEW", "Новый адрес")],
         ]
@@ -166,7 +173,7 @@ class MdbTransactionTests(unittest.TestCase):
             page, "source.mdb", "target.mdb"
         )
 
-        self.assertEqual(updated, 1)
+        self.assertEqual(updated, (1, 0))
         update_calls = [
             call for call in target_cursor.execute.call_args_list
             if str(call.args[0]).startswith("UPDATE")
@@ -177,6 +184,57 @@ class MdbTransactionTests(unittest.TestCase):
         self.assertIn("L.[ID]=M.[Location_ID]", update_sql)
         self.assertNotIn("WHERE [ID]=?", update_sql)
         self.assertEqual(update_calls[0].args[1], ("FIAS-NEW", "Новый адрес"))
+        target_connection.commit.assert_called_once_with()
+        target_connection.rollback.assert_not_called()
+
+    def test_fias_emergency_mode_repairs_dangling_location_link(self):
+        source_cursor = MagicMock()
+        source_cursor.description = [
+            ("ID",),
+            ("Code_FIAS",),
+            ("City_Name",),
+            ("Document_ID",),
+        ]
+        source_cursor.fetchall.return_value = [
+            ("SOURCE-ID", "FIAS-NEW", "Новый адрес", "SOURCE-DOCUMENT")
+        ]
+
+        target_cursor = MagicMock()
+        target_cursor.rowcount = 1
+        target_cursor.fetchall.side_effect = [
+            [("BROKEN-ID",)],
+            [],
+            [("SOURCE-ID",)],
+            [("SOURCE-ID",)],
+            [("SOURCE-ID", "FIAS-NEW", "Новый адрес")],
+        ]
+        source_connection = MagicMock()
+        source_connection.cursor.return_value = source_cursor
+        target_connection = MagicMock()
+        target_connection.cursor.return_value = target_cursor
+        connections = iter((source_connection, target_connection))
+        page = SimpleNamespace(
+            _same_file=lambda *_: False,
+            _get_conn=lambda *_: next(connections),
+            _quote_identifier=MdbCopyPage._quote_identifier,
+        )
+
+        result = MdbCopyPage._copy_locations_address(
+            page,
+            "source.mdb",
+            "target.mdb",
+            repair_missing_links=True,
+        )
+
+        self.assertEqual(result, (1, 1))
+        repair_calls = [
+            call for call in target_cursor.execute.call_args_list
+            if str(call.args[0]).startswith(
+                "UPDATE [Местоположения_картаплан] SET [Location_ID]"
+            )
+        ]
+        self.assertEqual(len(repair_calls), 1)
+        self.assertEqual(repair_calls[0].args[1], ("SOURCE-ID",))
         target_connection.commit.assert_called_once_with()
         target_connection.rollback.assert_not_called()
 

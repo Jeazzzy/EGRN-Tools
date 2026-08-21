@@ -116,6 +116,22 @@ class MdbPageLayoutTests(unittest.TestCase):
         finally:
             page.close()
 
+    def test_fias_repair_is_clearly_marked_and_disabled_by_default(self):
+        page = MdbCopyPage()
+        try:
+            self.assertFalse(page.fias_repair_links.isChecked())
+            self.assertIn("Крайний случай", page.fias_repair_links.text())
+            self.assertTrue(page.fias_repair_warning.isHidden())
+
+            page.show()
+            page.fias_repair_links.setChecked(True)
+            self.app.processEvents()
+
+            self.assertFalse(page.fias_repair_warning.isHidden())
+            self.assertIn("Аварийный режим", page.fias_repair_warning.text())
+        finally:
+            page.close()
+
 
 if __name__ == "__main__":
     unittest.main()

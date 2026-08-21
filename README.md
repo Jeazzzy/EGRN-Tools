@@ -137,8 +137,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 
 ```text
 dist/
-├── K_Tools 7.2.8.exe
-└── K_Tools 7.2.8.exe.sha256
+├── K_Tools 7.2.9.exe
+└── K_Tools 7.2.9.exe.sha256
 ```
 
 Предыдущий рабочий EXE сохраняется, если сборка или самопроверка завершилась
@@ -149,7 +149,7 @@ dist/
 Номер версии и канал выпуска задаются в `K_Tools/version.py`:
 
 ```python
-APP_VERSION = "7.2.8"
+APP_VERSION = "7.2.9"
 RELEASE_CHANNEL = ""
 ```
 

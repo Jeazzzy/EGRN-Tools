@@ -334,6 +334,28 @@ class MdbCopyPage(BasePage):
         ))
         self.fias_source = self._file_row(layout, "Source MDB", self._pick_mdb)
         self.fias_target = self._directory_row(layout, "Target: папка с MDB")
+        self.fias_repair_links = QCheckBox(
+            "Крайний случай — восстановить повреждённые связи Location_ID"
+        )
+        self.fias_repair_links.setToolTip(
+            "Включайте только для MDB, в которых Location_ID ссылается на "
+            "уже отсутствующую строку Locations. Перед запуском сделайте копию."
+        )
+        layout.addWidget(self.fias_repair_links)
+        self.fias_repair_warning = self._note(
+            "Аварийный режим перепривяжет Местоположения_картаплан к адресу "
+            "из source MDB. Используйте только если обычный режим сообщил "
+            "о повреждённой связи."
+        )
+        self.fias_repair_warning.setObjectName("warningBanner")
+        self.fias_repair_warning.setVisible(False)
+        layout.addWidget(self.fias_repair_warning)
+        self.fias_repair_links.toggled.connect(
+            lambda checked: (
+                self.fias_repair_warning.setVisible(checked),
+                self._fit_tabs(),
+            )
+        )
         self.tabs.addTab(tab, "Адрес по ФИАС")
 
     def _build_text(self):
@@ -514,7 +536,7 @@ class MdbCopyPage(BasePage):
             if target_conn is not None:
                 target_conn.close()
 
-    def _copy_locations_address(self, source, target):
+    def _copy_locations_address(self, source, target, repair_missing_links=False):
         """Переносит адрес, не ломая target Location_ID и Document_ID."""
         if self._same_file(source, target):
             raise ValueError("Source и target указывают на один MDB")
@@ -554,6 +576,27 @@ class MdbCopyPage(BasePage):
                     "Оставьте один адрес-источник."
                 )
             source_values = next(iter(variants))
+            id_index = next(
+                index for index, column in enumerate(columns)
+                if str(column).strip().casefold() == "id"
+            )
+            source_by_id = {
+                str(row[id_index]).casefold(): row for row in source_rows
+            }
+
+            target_cursor.execute(
+                f"SELECT DISTINCT [Location_ID] FROM {link_table} "
+                "WHERE [Location_ID] IS NOT NULL"
+            )
+            referenced_ids = {
+                str(row[0]).casefold(): row[0]
+                for row in target_cursor.fetchall()
+            }
+            if not referenced_ids:
+                raise ValueError(
+                    "В target MDB нет заполненных "
+                    "Местоположения_картаплан.Location_ID"
+                )
 
             target_cursor.execute(
                 f"SELECT DISTINCT M.[Location_ID] FROM {link_table} AS M "
@@ -561,11 +604,55 @@ class MdbCopyPage(BasePage):
                 "WHERE M.[Location_ID] IS NOT NULL"
             )
             target_ids = {str(row[0]).casefold() for row in target_cursor.fetchall()}
-            if not target_ids:
-                raise ValueError(
-                    "В target MDB нет корректной связи "
-                    "Местоположения_картаплан.Location_ID → Locations.ID"
+            missing_ids = set(referenced_ids).difference(target_ids)
+            repaired_links = 0
+            if missing_ids:
+                if not repair_missing_links:
+                    raise ValueError(
+                        "В target MDB повреждена связь "
+                        "Местоположения_картаплан.Location_ID → Locations.ID. "
+                        "Для восстановления включите «Крайний случай»"
+                    )
+                if len(source_by_id) != 1:
+                    raise ValueError(
+                        "Аварийное восстановление требует ровно одну связанную "
+                        "строку Locations в source MDB"
+                    )
+                source_key, source_row = next(iter(source_by_id.items()))
+                source_location_id = source_row[id_index]
+
+                target_cursor.execute(f"SELECT [ID] FROM {locations}")
+                existing_ids = {
+                    str(row[0]).casefold() for row in target_cursor.fetchall()
+                }
+                if source_key not in existing_ids:
+                    names = ", ".join(
+                        self._quote_identifier(column) for column in columns
+                    )
+                    placeholders = ", ".join("?" for _ in columns)
+                    target_cursor.execute(
+                        f"INSERT INTO {locations} ({names}) VALUES ({placeholders})",
+                        tuple(source_row),
+                    )
+
+                target_cursor.execute(
+                    f"UPDATE {link_table} SET [Location_ID]=? "
+                    "WHERE [Location_ID] IS NOT NULL",
+                    (source_location_id,),
                 )
+                repaired_links = max(target_cursor.rowcount, len(missing_ids))
+                target_cursor.execute(
+                    f"SELECT DISTINCT M.[Location_ID] FROM {link_table} AS M "
+                    f"INNER JOIN {locations} AS L ON L.[ID]=M.[Location_ID] "
+                    "WHERE M.[Location_ID] IS NOT NULL"
+                )
+                target_ids = {
+                    str(row[0]).casefold() for row in target_cursor.fetchall()
+                }
+                if target_ids != {source_key}:
+                    raise RuntimeError(
+                        "Не удалось восстановить связь Location_ID с Locations.ID"
+                    )
 
             assignments = ", ".join(
                 f"L.{self._quote_identifier(column)}=?" for column in copied_columns
@@ -595,7 +682,7 @@ class MdbCopyPage(BasePage):
                     "Не все связанные строки Locations удалось проверить после обновления"
                 )
             target_conn.commit()
-            return len(verified_ids)
+            return len(verified_ids), repaired_links
         except Exception:
             if target_conn is not None:
                 target_conn.rollback()
@@ -695,7 +782,25 @@ class MdbCopyPage(BasePage):
                 self.table_combo.currentText().strip(),
             )
         elif mode == 3:
-            params = (self.fias_source.text().strip(), self.fias_target.text().strip())
+            repair_links = self.fias_repair_links.isChecked()
+            if repair_links:
+                answer = QMessageBox.warning(
+                    self,
+                    "Аварийное восстановление MDB",
+                    "Этот режим предназначен только для повреждённых связей. "
+                    "Он изменит Location_ID в таблице Местоположения_картаплан.\n\n"
+                    "Перед продолжением рекомендуется сделать резервную копию MDB. "
+                    "Продолжить?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
+            params = (
+                self.fias_source.text().strip(),
+                self.fias_target.text().strip(),
+                repair_links,
+            )
         else:
             params = (self.text_folder.text().strip(), self.text_outside.isChecked())
         self.clear_log()
@@ -773,7 +878,8 @@ class MdbCopyPage(BasePage):
             return self._copy_to_targets(signals, source, targets, table)
 
         if mode == 3:
-            source, target_root = params
+            source, target_root, *options = params
+            repair_links = bool(options[0]) if options else False
             if not os.path.isfile(source) or not os.path.isdir(target_root):
                 raise ValueError("Проверьте source MDB и target папку")
             targets = [
@@ -782,7 +888,11 @@ class MdbCopyPage(BasePage):
             ]
             return self._copy_to_targets(
                 signals, source, targets, "адрес Locations",
-                copier=self._copy_locations_address,
+                copier=lambda source_path, target_path: self._copy_locations_address(
+                    source_path,
+                    target_path,
+                    repair_missing_links=repair_links,
+                ),
             )
 
         folder, outside = params
@@ -827,9 +937,15 @@ class MdbCopyPage(BasePage):
         failed = 0
         for position, target in enumerate(targets, 1):
             try:
-                copier(source, target)
+                result = copier(source, target)
                 changed += 1
-                signals.message.emit(f"OK: {target}")
+                details = ""
+                if isinstance(result, tuple) and len(result) == 2:
+                    updated_rows, repaired_links = result
+                    details = f" — строк: {updated_rows}"
+                    if repaired_links:
+                        details += f", аварийно восстановлено связей: {repaired_links}"
+                signals.message.emit(f"OK: {target}{details}")
             except Exception as error:
                 failed += 1
                 signals.message.emit(f"Ошибка: {target}: {error}")
