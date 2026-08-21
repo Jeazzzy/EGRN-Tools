@@ -132,6 +132,21 @@ class MdbPageLayoutTests(unittest.TestCase):
         finally:
             page.close()
 
+    def test_locations_check_is_clearly_read_only(self):
+        page = MdbCopyPage()
+        try:
+            self.assertIn("Проверить Locations", page.fias_check_btn.text())
+            self.assertIn("без изменений", page.fias_check_btn.text())
+            self.assertIn("не изменяются", page.fias_check_btn.toolTip())
+            self.assertIn("Удалить лишние", page.fias_cleanup_btn.text())
+            self.assertTrue(page.fias_cleanup_btn.property("danger"))
+            self.assertIn(
+                "Местоположения_картаплан.Location_ID",
+                page.fias_cleanup_btn.toolTip(),
+            )
+        finally:
+            page.close()
+
 
 if __name__ == "__main__":
     unittest.main()

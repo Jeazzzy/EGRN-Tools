@@ -334,6 +334,23 @@ class MdbCopyPage(BasePage):
         ))
         self.fias_source = self._file_row(layout, "Source MDB", self._pick_mdb)
         self.fias_target = self._directory_row(layout, "Target: папка с MDB")
+        self.fias_check_btn = QPushButton("Проверить Locations — без изменений")
+        self.fias_check_btn.setToolTip(
+            "Сравнить только Locations и Местоположения_картаплан. "
+            "Данные MDB не изменяются."
+        )
+        self.fias_check_btn.clicked.connect(self.check_locations)
+        self.fias_cleanup_btn = QPushButton("Удалить лишние адреса Locations")
+        self.fias_cleanup_btn.setProperty("danger", True)
+        self.fias_cleanup_btn.setToolTip(
+            "Удалить строки Locations, ID которых не используется в "
+            "Местоположения_картаплан.Location_ID."
+        )
+        self.fias_cleanup_btn.clicked.connect(self.cleanup_locations)
+        address_actions = QHBoxLayout()
+        address_actions.addWidget(self.fias_check_btn)
+        address_actions.addWidget(self.fias_cleanup_btn)
+        layout.addLayout(address_actions)
         self.fias_repair_links = QCheckBox(
             "Крайний случай — восстановить повреждённые связи Location_ID"
         )
@@ -719,6 +736,267 @@ class MdbCopyPage(BasePage):
         finally:
             connection.close()
 
+    @staticmethod
+    def _classify_location_rows(columns, rows, references):
+        """Сравнивает Locations только со ссылками Местоположения_картаплан."""
+        by_key = {
+            str(column).strip().casefold(): index
+            for index, column in enumerate(columns)
+        }
+        if "id" not in by_key:
+            raise ValueError("В таблице Locations нет поля ID")
+        id_index = by_key["id"]
+        document_index = by_key.get("document_id")
+        ignored = {"id", "document_id", "insert_date"}
+        address_indexes = [
+            index for index, column in enumerate(columns)
+            if str(column).strip().casefold() not in ignored
+        ]
+
+        def hashable(value):
+            try:
+                hash(value)
+                return value
+            except TypeError:
+                return bytes(value) if isinstance(value, bytearray) else repr(value)
+
+        locations = {}
+        duplicate_candidates = {}
+        for row in rows:
+            location_id = row[id_index]
+            key = str(location_id).casefold()
+            document_id = row[document_index] if document_index is not None else None
+            locations[key] = (location_id, document_id)
+            signature = tuple(hashable(row[index]) for index in address_indexes)
+            duplicate_candidates.setdefault(signature, []).append(location_id)
+
+        location_keys = set(locations)
+        reference_keys = set(references)
+        orphaned = [
+            locations[key] for key in sorted(location_keys - reference_keys)
+        ]
+        dangling = {
+            key: references[key]
+            for key in sorted(reference_keys - location_keys)
+        }
+        duplicates = [
+            ids for ids in duplicate_candidates.values() if len(ids) > 1
+        ]
+        return {
+            "total": len(rows),
+            "used": len(location_keys & reference_keys),
+            "orphaned": orphaned,
+            "dangling": dangling,
+            "duplicates": duplicates,
+        }
+
+    def _inspect_locations(self, path):
+        """Только читает Locations и Местоположения_картаплан."""
+        connection = self._get_conn(path)
+        try:
+            cursor = connection.cursor()
+            references = {}
+            cursor.execute(
+                "SELECT DISTINCT [Location_ID] "
+                "FROM [Местоположения_картаплан] "
+                "WHERE [Location_ID] IS NOT NULL"
+            )
+            for row in cursor.fetchall():
+                references[str(row[0]).casefold()] = {
+                    "value": row[0],
+                    "sources": {"Местоположения_картаплан.Location_ID"},
+                }
+
+            cursor.execute("SELECT * FROM [Locations]")
+            columns = [item[0] for item in cursor.description]
+            rows = cursor.fetchall()
+            classified = self._classify_location_rows(columns, rows, references)
+            classified["scan_errors"] = []
+            return classified
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _format_locations_report(path, report):
+        lines = [
+            f"{path}",
+            "  Locations: "
+            f"всего {report['total']}, используются {report['used']}, "
+            f"лишних {len(report['orphaned'])}, "
+            f"оборванных ссылок {len(report['dangling'])}, "
+            f"групп совпадающих адресов {len(report['duplicates'])}",
+        ]
+        for location_id, document_id in report["orphaned"]:
+            lines.append(
+                f"  Лишняя запись: ID={location_id}; Document_ID={document_id}"
+            )
+        for entry in report["dangling"].values():
+            sources = ", ".join(sorted(entry["sources"], key=str.casefold))
+            lines.append(
+                f"  Оборванная ссылка: ID={entry['value']}; из {sources}"
+            )
+        for ids in report["duplicates"]:
+            lines.append(
+                "  Совпадающий адрес (может быть штатным): "
+                + ", ".join(map(str, ids))
+            )
+        for error in report["scan_errors"]:
+            lines.append(f"  Не удалось проверить ссылку: {error}")
+        return "\n".join(lines)
+
+    def check_locations(self):
+        root = self.fias_target.text().strip()
+        if not os.path.isdir(root):
+            QMessageBox.warning(self, "Внимание", "Укажите корректную target-папку с MDB")
+            return
+        self.clear_log()
+        if self.progress_bar is not None:
+            self.progress_bar.setValue(0)
+        self._set_action_buttons_enabled(False)
+        self.start_task(
+            self._execute_locations_check,
+            root,
+            on_result=lambda result: QMessageBox.information(self, "Проверка Locations", result),
+            on_error=self._show_error,
+            on_finished=lambda: self._set_action_buttons_enabled(True),
+        )
+
+    def _execute_locations_check(self, signals, root):
+        files = self._collect_all_mdb(root)
+        if not files:
+            raise ValueError("MDB-файлы не найдены")
+        failed = 0
+        totals = {"orphaned": 0, "dangling": 0, "duplicates": 0}
+        for position, path in enumerate(files, 1):
+            try:
+                report = self._inspect_locations(path)
+                totals["orphaned"] += len(report["orphaned"])
+                totals["dangling"] += len(report["dangling"])
+                totals["duplicates"] += len(report["duplicates"])
+                signals.message.emit(self._format_locations_report(path, report))
+            except Exception as error:
+                failed += 1
+                signals.message.emit(f"Не удалось проверить {path}: {error}")
+            signals.progress.emit(position, len(files))
+        return (
+            f"Проверено MDB: {len(files)}; ошибок чтения: {failed}; "
+            f"лишних записей: {totals['orphaned']}; "
+            f"оборванных ссылок: {totals['dangling']}; "
+            f"групп совпадающих адресов: {totals['duplicates']}. "
+            "Никакие данные не изменялись."
+        )
+
+    def _delete_unused_locations(self, path):
+        """Удаляет только Locations.ID, отсутствующие в таблице связей."""
+        connection = self._get_conn(path)
+        try:
+            cursor = connection.cursor()
+            dangling_sql = (
+                "SELECT DISTINCT M.[Location_ID] "
+                "FROM [Местоположения_картаплан] AS M "
+                "LEFT JOIN [Locations] AS L ON L.[ID]=M.[Location_ID] "
+                "WHERE M.[Location_ID] IS NOT NULL AND L.[ID] IS NULL"
+            )
+            cursor.execute(dangling_sql)
+            dangling = [row[0] for row in cursor.fetchall()]
+            if dangling:
+                raise ValueError(
+                    "Сначала восстановите оборванную связь Location_ID: "
+                    + ", ".join(map(str, dangling))
+                )
+
+            unused_count_sql = (
+                "SELECT COUNT(*) FROM [Locations] AS L "
+                "LEFT JOIN [Местоположения_картаплан] AS M "
+                "ON L.[ID]=M.[Location_ID] WHERE M.[Location_ID] IS NULL"
+            )
+            cursor.execute(unused_count_sql)
+            unused_before = cursor.fetchone()[0]
+            if unused_before:
+                cursor.execute(
+                    "DELETE L.* FROM [Locations] AS L "
+                    "LEFT JOIN [Местоположения_картаплан] AS M "
+                    "ON L.[ID]=M.[Location_ID] WHERE M.[Location_ID] IS NULL"
+                )
+
+            cursor.execute(dangling_sql)
+            if cursor.fetchall():
+                raise RuntimeError("После очистки обнаружена оборванная связь Location_ID")
+            cursor.execute(unused_count_sql)
+            if cursor.fetchone()[0] != 0:
+                raise RuntimeError("Access удалил не все лишние строки Locations")
+            cursor.execute("SELECT COUNT(*) FROM [Locations]")
+            remaining = cursor.fetchone()[0]
+            connection.commit()
+            return unused_before, remaining
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def cleanup_locations(self):
+        root = self.fias_target.text().strip()
+        if not os.path.isdir(root):
+            QMessageBox.warning(self, "Внимание", "Укажите корректную target-папку с MDB")
+            return
+        answer = QMessageBox.warning(
+            self,
+            "Удаление лишних адресов",
+            "Будут удалены все строки Locations, ID которых не указан в "
+            "Местоположения_картаплан.Location_ID.\n\n"
+            "Перед продолжением сделайте резервную копию MDB. Продолжить?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.clear_log()
+        if self.progress_bar is not None:
+            self.progress_bar.setValue(0)
+        self._set_action_buttons_enabled(False)
+        self.start_task(
+            self._execute_locations_cleanup,
+            root,
+            on_result=lambda result: QMessageBox.information(self, "Очистка Locations", result),
+            on_error=self._show_error,
+            on_finished=lambda: self._set_action_buttons_enabled(True),
+        )
+
+    def _execute_locations_cleanup(self, signals, root):
+        files = self._collect_all_mdb(root)
+        if not files:
+            raise ValueError("MDB-файлы не найдены")
+        deleted = 0
+        changed = 0
+        failed = 0
+        for position, path in enumerate(files, 1):
+            try:
+                removed, remaining = self._delete_unused_locations(path)
+                deleted += removed
+                changed += int(removed > 0)
+                signals.message.emit(
+                    f"OK: {path} — удалено {removed}, осталось {remaining}"
+                )
+            except Exception as error:
+                failed += 1
+                signals.message.emit(f"Ошибка очистки: {path}: {error}")
+            signals.progress.emit(position, len(files))
+        if failed:
+            raise RuntimeError(
+                f"Очистка выполнена частично: успешно {len(files) - failed}, "
+                f"ошибок {failed}, удалено строк {deleted}. Подробности — в журнале."
+            )
+        return (
+            f"Проверено MDB: {len(files)}; изменено MDB: {changed}; "
+            f"удалено лишних строк Locations: {deleted}."
+        )
+
+    def _set_action_buttons_enabled(self, enabled):
+        self.run_btn.setEnabled(enabled)
+        self.fias_check_btn.setEnabled(enabled)
+        self.fias_cleanup_btn.setEnabled(enabled)
+
     def _update_title(self, path, name, kind, outside=False):
         connection, updated = self._get_conn(path), 0
         try:
@@ -806,14 +1084,14 @@ class MdbCopyPage(BasePage):
         self.clear_log()
         if self.progress_bar is not None:
             self.progress_bar.setValue(0)
-        self.run_btn.setEnabled(False)
+        self._set_action_buttons_enabled(False)
         self.start_task(
             self._execute,
             mode,
             params,
             on_result=lambda result: QMessageBox.information(self, "Готово", result),
             on_error=self._show_error,
-            on_finished=lambda: self.run_btn.setEnabled(True),
+            on_finished=lambda: self._set_action_buttons_enabled(True),
         )
 
     def _execute(self, signals, mode, params):

@@ -187,6 +187,96 @@ class MdbTransactionTests(unittest.TestCase):
         target_connection.commit.assert_called_once_with()
         target_connection.rollback.assert_not_called()
 
+
+class MdbLocationsAuditTests(unittest.TestCase):
+    def test_classifies_orphans_dangling_links_and_exact_duplicates(self):
+        columns = ["ID", "City_Name", "Document_ID", "Insert_Date"]
+        rows = [
+            ("USED", "Адрес А", "DOC-1", "DATE-1"),
+            ("ORPHAN-DUP", "Адрес А", "DOC-2", "DATE-2"),
+            ("ORPHAN-OTHER", "Адрес Б", "DOC-3", "DATE-3"),
+        ]
+        references = {
+            "used": {"value": "USED", "sources": {"Table.Location_ID"}},
+            "missing": {
+                "value": "MISSING",
+                "sources": {"Broken.Location_ID"},
+            },
+        }
+
+        report = MdbCopyPage._classify_location_rows(
+            columns,
+            rows,
+            references,
+        )
+
+        self.assertEqual(report["total"], 3)
+        self.assertEqual(report["used"], 1)
+        self.assertEqual(
+            {item[0] for item in report["orphaned"]},
+            {"ORPHAN-DUP", "ORPHAN-OTHER"},
+        )
+        self.assertEqual(set(report["dangling"]), {"missing"})
+        self.assertEqual(report["duplicates"], [["USED", "ORPHAN-DUP"]])
+
+    def test_report_explicitly_describes_read_only_findings(self):
+        report = {
+            "total": 2,
+            "used": 1,
+            "orphaned": [("ORPHAN", "DOC")],
+            "dangling": {
+                "missing": {
+                    "value": "MISSING",
+                    "sources": {"Table.Location_ID"},
+                }
+            },
+            "duplicates": [["A", "B"]],
+            "scan_errors": [],
+        }
+
+        text = MdbCopyPage._format_locations_report("test.mdb", report)
+
+        self.assertIn("Лишняя запись", text)
+        self.assertIn("Оборванная ссылка", text)
+        self.assertIn("Совпадающий адрес", text)
+
+    def test_cleanup_deletes_only_locations_not_used_by_map_plan(self):
+        cursor = MagicMock()
+        cursor.fetchall.side_effect = [[], []]
+        cursor.fetchone.side_effect = [(2,), (0,), (1,)]
+        connection = MagicMock()
+        connection.cursor.return_value = cursor
+        page = SimpleNamespace(_get_conn=lambda *_: connection)
+
+        result = MdbCopyPage._delete_unused_locations(page, "target.mdb")
+
+        self.assertEqual(result, (2, 1))
+        delete_calls = [
+            call for call in cursor.execute.call_args_list
+            if str(call.args[0]).startswith("DELETE L.* FROM [Locations]")
+        ]
+        self.assertEqual(len(delete_calls), 1)
+        self.assertIn("M.[Location_ID] IS NULL", delete_calls[0].args[0])
+        connection.commit.assert_called_once_with()
+        connection.rollback.assert_not_called()
+
+    def test_cleanup_refuses_database_with_dangling_map_plan_link(self):
+        cursor = MagicMock()
+        cursor.fetchall.return_value = [("BROKEN-ID",)]
+        connection = MagicMock()
+        connection.cursor.return_value = cursor
+        page = SimpleNamespace(_get_conn=lambda *_: connection)
+
+        with self.assertRaisesRegex(ValueError, "Сначала восстановите"):
+            MdbCopyPage._delete_unused_locations(page, "target.mdb")
+
+        connection.rollback.assert_called_once_with()
+        connection.commit.assert_not_called()
+        self.assertFalse(any(
+            str(call.args[0]).startswith("DELETE")
+            for call in cursor.execute.call_args_list
+        ))
+
     def test_fias_emergency_mode_repairs_dangling_location_link(self):
         source_cursor = MagicMock()
         source_cursor.description = [
