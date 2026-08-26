@@ -53,6 +53,69 @@ class ReleaseCheckerPageTests(unittest.TestCase):
             dialog.close()
             settings.clear()
 
+    def test_cover_dialog_prefills_inferred_municipality_but_keeps_it_editable(self):
+        settings = QSettings("K Tools", "ReleaseToc")
+        settings.clear()
+        inferred = (
+            "Ахтанизовского сельского поселения Темрюкского района "
+            "Краснодарского края"
+        )
+        dialog = TocCoverDialog(
+            RELEASE_MODE_TZ,
+            TOC_SCOPE_OBJECTS,
+            suggested_municipality=inferred,
+        )
+        try:
+            self.assertEqual(dialog.municipality_edit.text(), inferred)
+            self.assertIn(
+                "АХТАНИЗОВСКОГО СЕЛЬСКОГО ПОСЕЛЕНИЯ",
+                dialog.title_edit.toPlainText(),
+            )
+            self.assertFalse(dialog.municipality_edit.isReadOnly())
+            self.assertIn("автоматически", dialog.municipality_edit.toolTip())
+        finally:
+            dialog.close()
+            settings.clear()
+
+    def test_toc_municipality_suggestion_reads_selected_pdf_descriptions(self):
+        with TemporaryDirectory() as temporary:
+            release = Path(temporary)
+            pdf_root = release / "pdf"
+            settlement = pdf_root / "п. Мысхако"
+            settlement.mkdir(parents=True)
+            pdf_files = [settlement / "ВИ1.pdf", settlement / "И1.pdf"]
+            descriptions = [
+                "Зона в границах поселка Мысхако Ахтанизовского сельского "
+                "поселения Темрюкского района Краснодарского края",
+                "Зона в границах Ахтанизовского сельского поселения "
+                "Темрюкского района Краснодарского края",
+            ]
+
+            with (
+                patch(
+                    "pages.release_checker._toc_pdf_selection",
+                    return_value=(pdf_root, pdf_files, release, None),
+                ),
+                patch(
+                    "pages.release_checker.inspect_pdf_page_count",
+                    side_effect=[
+                        SimpleNamespace(object_name=description)
+                        for description in descriptions
+                    ],
+                ),
+            ):
+                municipality = ReleaseCheckerPage._suggest_toc_municipality(
+                    release,
+                    RELEASE_MODE_TZ,
+                    TOC_SCOPE_OBJECTS,
+                )
+
+            self.assertEqual(
+                municipality,
+                "Ахтанизовского сельского поселения Темрюкского района "
+                "Краснодарского края",
+            )
+
     def test_release_tables_allow_moving_and_resizing_columns(self):
         page = ReleaseCheckerPage()
         try:

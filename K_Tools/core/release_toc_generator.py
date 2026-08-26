@@ -39,6 +39,19 @@ TOC_SCOPE_SETTLEMENTS = "settlements"
 _DEFAULT_SETTLEMENT_TITLE_PREFIX = (
     "Графические описания местоположения границ территориальных зон в границах"
 )
+_MUNICIPALITY_UNIT_PATTERN = re.compile(
+    r"\b(?:сельского|городского)\s+поселения\b"
+    r"|\bмуниципального\s+(?:образования|округа|района)\b"
+    r"|\bгородского\s+округа\b",
+    re.IGNORECASE,
+)
+_LOCALITY_PREFIX_PATTERN = re.compile(
+    r"^(?:территории\s+)?(?:"
+    r"рабочего\s+пос[её]лка|пос[её]лка|села|деревни|станицы|хутора|города|"
+    r"аула|железнодорожного\s+разъезда|жд\s+разъезда"
+    r")\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -88,6 +101,63 @@ class WordRepaginationResult:
 
     pages: int | None
     error: str = ""
+
+
+def infer_municipality(titles: Iterable[str]) -> str:
+    """Определяет общую часть МО из оборотов «в границах …» в описаниях."""
+
+    tails: list[list[str]] = []
+    for title in titles:
+        normalised = " ".join((title or "").split())
+        matches = list(
+            re.finditer(r"\bв\s+границах\s+", normalised, re.IGNORECASE)
+        )
+        if not matches:
+            continue
+        tail = normalised[matches[-1].end() :]
+        tail = re.sub(r"\s*\.{2,}\s*\d*\s*$", "", tail).strip(" .;,:")
+        if tail:
+            tails.append(tail.split())
+
+    if not tails:
+        return ""
+
+    common_reversed: list[str] = []
+    for words in zip(*(reversed(tail) for tail in tails)):
+        comparable = {
+            word.strip(".,;:()[]{}«»\"").casefold() for word in words
+        }
+        if len(comparable) != 1:
+            break
+        common_reversed.append(words[0])
+    candidate = " ".join(reversed(common_reversed)).strip()
+    if not candidate:
+        return ""
+
+    unit = _MUNICIPALITY_UNIT_PATTERN.search(candidate)
+    if unit is None:
+        return ""
+
+    # Если перед названием МО указан населённый пункт, например
+    # «поселка Мысхако Ахтанизовского сельского поселения», оставляем
+    # административную часть начиная с названия сельского поселения.
+    prefix = candidate[: unit.start()].strip()
+    if _LOCALITY_PREFIX_PATTERN.match(prefix):
+        prefix_words = prefix.split()
+        if not prefix_words:
+            return ""
+        candidate = f"{prefix_words[-1]} {candidate[unit.start():]}"
+        unit = _MUNICIPALITY_UNIT_PATTERN.search(candidate)
+
+    # «сельского поселения …» без его названия получается при смешении
+    # разных МО и не является безопасной автоподстановкой.
+    if (
+        unit is not None
+        and unit.start() == 0
+        and re.match(r"(?:сельского|городского)\s+поселения", candidate, re.I)
+    ):
+        return ""
+    return " ".join(candidate.split())
 
 
 def _word_text_runs(value: str, *, bold: bool = False, size: int = 28) -> str:

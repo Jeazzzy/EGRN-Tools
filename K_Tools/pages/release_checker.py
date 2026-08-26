@@ -45,6 +45,7 @@ from core.release_toc_generator import (
     TOC_SCOPE_SETTLEMENTS,
     TocCoverData,
     create_release_toc,
+    infer_municipality,
 )
 from core.settlement_names import settlement_key
 from core.release_xml_checker import (
@@ -125,7 +126,13 @@ def _toc_xml_selection(
 class TocCoverDialog(QDialog):
     """Собирает только смысловые поля стандартного титульного листа."""
 
-    def __init__(self, release_mode, toc_scope, parent=None):
+    def __init__(
+        self,
+        release_mode,
+        toc_scope,
+        parent=None,
+        suggested_municipality="",
+    ):
         super().__init__(parent)
         self.release_mode = release_mode
         self.toc_scope = toc_scope
@@ -149,9 +156,16 @@ class TocCoverDialog(QDialog):
         self.municipality_edit.setPlaceholderText(
             "Например: «Город Саратов» Саратовской области"
         )
-        self.municipality_edit.setText(
-            self.settings.value(f"{self.settings_key}/municipality", "")
+        saved_municipality = self.settings.value(
+            f"{self.settings_key}/municipality", ""
         )
+        municipality = suggested_municipality.strip() or saved_municipality
+        self.municipality_edit.setText(municipality)
+        if suggested_municipality.strip():
+            self.municipality_edit.setToolTip(
+                "Определено автоматически из описаний PDF. "
+                "При необходимости значение можно исправить."
+            )
         form.addRow("Муниципальное образование:", self.municipality_edit)
 
         self.title_edit = QPlainTextEdit()
@@ -161,9 +175,10 @@ class TocCoverDialog(QDialog):
         self._last_auto_title = self._automatic_title(
             self.municipality_edit.text()
         )
-        if saved_title == self._legacy_automatic_title(
-            self.municipality_edit.text()
-        ):
+        if saved_title in {
+            self._automatic_title(saved_municipality),
+            self._legacy_automatic_title(saved_municipality),
+        }:
             saved_title = ""
         self.title_edit.setPlainText(saved_title or self._last_auto_title)
         form.addRow("Название документа:", self.title_edit)
@@ -787,6 +802,40 @@ class ReleaseCheckerPage(BasePage):
             f"Результаты сохранены: {saved_path}",
         )
 
+    @staticmethod
+    def _suggest_toc_municipality(selected_folder, release_mode, toc_scope):
+        """Читает несколько первых описаний PDF для автозаполнения МО."""
+
+        try:
+            pdf_folder, pdf_files, _, _ = _toc_pdf_selection(
+                selected_folder,
+                toc_scope,
+            )
+        except (OSError, ValueError):
+            return ""
+
+        suitable_files = []
+        for pdf_path in pdf_files:
+            try:
+                depth = len(pdf_path.relative_to(pdf_folder).parts)
+            except ValueError:
+                depth = 1
+            if toc_scope == TOC_SCOPE_SETTLEMENTS or release_mode == RELEASE_MODE_NP:
+                suitable = depth == 1
+            else:
+                suitable = depth >= 2
+            if suitable:
+                suitable_files.append(pdf_path)
+            if len(suitable_files) >= 12:
+                break
+
+        titles = []
+        for pdf_path in suitable_files:
+            result = inspect_pdf_page_count(pdf_path, pdf_folder)
+            if result.object_name:
+                titles.append(result.object_name)
+        return infer_municipality(titles)
+
     def create_toc(
         self,
         without_xml=False,
@@ -815,7 +864,17 @@ class ReleaseCheckerPage(BasePage):
                 if toc_scope == TOC_SCOPE_SETTLEMENTS
                 else self.release_mode_combo.currentData()
             )
-            dialog = TocCoverDialog(effective_mode, toc_scope, self)
+            suggested_municipality = self._suggest_toc_municipality(
+                selected_folder,
+                effective_mode,
+                toc_scope,
+            )
+            dialog = TocCoverDialog(
+                effective_mode,
+                toc_scope,
+                self,
+                suggested_municipality,
+            )
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 return
             cover = dialog.cover_data()

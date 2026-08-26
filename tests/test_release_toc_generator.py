@@ -14,6 +14,7 @@ from core.release_toc_generator import (
     _repaginate_with_word,
     build_toc_entries,
     create_release_toc,
+    infer_municipality,
 )
 from core.release_xml_checker import (
     RELEASE_MODE_NP,
@@ -96,6 +97,52 @@ def make_template(path, pages=2, entry_title="Старое название"):
 
 
 class TocEntriesTests(unittest.TestCase):
+    def test_infers_municipality_from_boundary_descriptions(self):
+        municipality = infer_municipality(
+            [
+                "Графическое описание местоположения границ территориальной "
+                "зоны – ВИ1. Зона виноградников в границах Ахтанизовского "
+                "сельского поселения Темрюкского района Краснодарского края",
+                "Графическое описание местоположения границ территориальной "
+                "зоны – И1. Зона инженерной инфраструктуры в границах "
+                "Ахтанизовского сельского поселения Темрюкского района "
+                "Краснодарского края",
+            ]
+        )
+
+        self.assertEqual(
+            municipality,
+            "Ахтанизовского сельского поселения Темрюкского района "
+            "Краснодарского края",
+        )
+
+    def test_removes_locality_before_inferred_municipality(self):
+        municipality = infer_municipality(
+            [
+                "Территориальная зона в границах поселка Мысхако "
+                "Ахтанизовского сельского поселения Темрюкского района "
+                "Краснодарского края"
+            ]
+        )
+
+        self.assertEqual(
+            municipality,
+            "Ахтанизовского сельского поселения Темрюкского района "
+            "Краснодарского края",
+        )
+
+    def test_does_not_guess_when_descriptions_contain_different_settlements(self):
+        municipality = infer_municipality(
+            [
+                "Зона в границах Ахтанизовского сельского поселения "
+                "Темрюкского района Краснодарского края",
+                "Зона в границах Запорожского сельского поселения "
+                "Темрюкского района Краснодарского края",
+            ]
+        )
+
+        self.assertEqual(municipality, "")
+
     def test_builds_entries_from_combined_settlement_pdfs(self):
         entries, missing = build_toc_entries(
             [
