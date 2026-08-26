@@ -962,13 +962,19 @@ class ReleaseCheckerPage(BasePage):
                 f"3. В расчёте использовано страниц оглавления: "
                 f"{result.front_matter_pages}. Если фактическое число отличается, "
                 "проверьте и исправьте начальные страницы разделов.\n"
+                f"   Первый PDF должен начинаться со страницы "
+                f"{result.front_matter_pages + 1}.\n"
                 "4. Для автоматического расчёта восстановите Microsoft Office/COM.",
             )
             return
         QMessageBox.information(
             self,
             "Оглавление создано",
-            f"Файл сохранён:\n{result.output_path}{warning}",
+            f"Файл сохранён:\n{result.output_path}{warning}\n\n"
+            f"Титульник и оглавление: {result.front_matter_pages} стр.\n"
+            f"Первый PDF начинается со страницы "
+            f"{result.front_matter_pages + 1}.\n"
+            f"Всего страниц в добавляемых PDF: {result.total_pdf_pages}.",
         )
 
     @staticmethod

@@ -189,6 +189,7 @@ class ReleaseCheckerPageTests(unittest.TestCase):
             self.assertIn("COM-интерфейс Word не найден", message)
             self.assertIn("Откройте созданный DOCX", message)
             self.assertIn("использовано страниц оглавления: 3", message)
+            self.assertIn("Первый PDF должен начинаться со страницы 4", message)
         finally:
             page.close()
 

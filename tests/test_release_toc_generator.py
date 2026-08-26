@@ -181,6 +181,20 @@ class TocEntriesTests(unittest.TestCase):
         )
         self.assertEqual([entry.start_page for entry in entries], [1, 2, 4])
 
+    def test_next_document_starts_after_all_pages_of_previous_pdf(self):
+        entries, _ = build_toc_entries(
+            [
+                pdf_result("НП", "И1.pdf", r"НП\И1.pdf", 10),
+                pdf_result("НП", "И2.pdf", r"НП\И2.pdf", 7),
+            ],
+            [],
+            RELEASE_MODE_TZ,
+            first_page=6,
+        )
+
+        self.assertEqual([entry.start_page for entry in entries], [6, 16])
+        self.assertEqual([entry.page_count for entry in entries], [10, 7])
+
     def test_expands_railway_crossing_in_settlement_title(self):
         entries, _ = build_toc_entries(
             [
@@ -297,6 +311,45 @@ class TocEntriesTests(unittest.TestCase):
 
 
 class CreateTocTests(unittest.TestCase):
+    def test_uses_created_front_matter_pages_before_accumulating_pdf_pages(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            template = root / "Титульник.docx"
+            output = root / "Оглавление.docx"
+            make_template(template, pages=2)
+
+            with patch(
+                "core.release_toc_generator._repaginate_with_word",
+                side_effect=[
+                    WordRepaginationResult(5),
+                    WordRepaginationResult(5),
+                ],
+            ):
+                result = create_release_toc(
+                    template,
+                    output,
+                    [
+                        pdf_result("НП", "И1.pdf", r"НП\И1.pdf", 10),
+                        pdf_result("НП", "И2.pdf", r"НП\И2.pdf", 7),
+                    ],
+                    [],
+                    RELEASE_MODE_TZ,
+                )
+
+            self.assertEqual(result.front_matter_pages, 5)
+            with ZipFile(output) as archive:
+                document = ElementTree.fromstring(
+                    archive.read("word/document.xml")
+                )
+            paragraphs = [
+                "".join(element.itertext())
+                for element in document.findall(
+                    f".//{{{WORD_NAMESPACE}}}body/{{{WORD_NAMESPACE}}}p"
+                )
+            ]
+            self.assertTrue(paragraphs[-2].endswith("6"))
+            self.assertTrue(paragraphs[-1].endswith("16"))
+
     def test_creates_complete_standard_document_without_user_template(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -52,6 +52,15 @@ class TocEntry:
 
 
 @dataclass(frozen=True)
+class TocSource:
+    """Документ выпуска до назначения ему номера первой страницы."""
+
+    title: str
+    page_count: int
+    source_path: str
+
+
+@dataclass(frozen=True)
 class TocCoverData:
     """Тексты стандартного титульного листа K Tools."""
 
@@ -101,7 +110,7 @@ def _word_text_runs(value: str, *, bold: bool = False, size: int = 28) -> str:
     return "".join(parts)
 
 
-def _estimated_standard_pages(entries: list[TocEntry]) -> int:
+def _estimated_standard_pages(entries: Iterable[TocSource | TocEntry]) -> int:
     """Грубая страховочная оценка страниц при недоступном Word COM."""
 
     line_count = sum(max(1, (len(entry.title) + 82) // 83) for entry in entries)
@@ -296,15 +305,14 @@ def _entry_title(
     )
 
 
-def build_toc_entries(
+def build_toc_sources(
     pdf_results: Iterable[PdfAreaResult],
     xml_results: Iterable[XmlReleaseResult],
     release_mode: str,
-    first_page: int,
     toc_scope: str = TOC_SCOPE_OBJECTS,
     settlement_title_format: tuple[str, str] | None = None,
-) -> tuple[list[TocEntry], int]:
-    """Сопоставляет PDF с XML и вычисляет номера первых страниц."""
+) -> tuple[list[TocSource], int]:
+    """Сначала собирает окончательные заголовки и длины включённых PDF."""
 
     if release_mode not in {RELEASE_MODE_TZ, RELEASE_MODE_NP}:
         raise ValueError(f"Неизвестный режим выпуска «{release_mode}».")
@@ -314,13 +322,10 @@ def build_toc_entries(
         raise ValueError(
             "Общие PDF по населённым пунктам создаются для выпуска ТЗ."
         )
-    if first_page < 1:
-        raise ValueError("Номер первой страницы должен быть положительным.")
 
     title_map = _xml_title_map(xml_results, release_mode)
-    entries: list[TocEntry] = []
+    sources: list[TocSource] = []
     missing_xml_count = 0
-    current_page = first_page
     for result in sorted(
         pdf_results,
         key=lambda item: natural_path_key(item.relative_path),
@@ -346,8 +351,8 @@ def build_toc_entries(
             and not result.object_name
         ):
             missing_xml_count += 1
-        entries.append(
-            TocEntry(
+        sources.append(
+            TocSource(
                 title=_entry_title(
                     result,
                     xml_title,
@@ -356,15 +361,78 @@ def build_toc_entries(
                     settlement_title_format,
                 ),
                 page_count=result.page_count,
-                start_page=current_page,
                 source_path=result.full_path,
             )
         )
-        current_page += result.page_count
 
-    if not entries:
+    if not sources:
         raise ValueError("Не найдены PDF, подходящие для оглавления.")
-    return entries, missing_xml_count
+    return sources, missing_xml_count
+
+
+def paginate_toc_sources(
+    sources: Iterable[TocSource],
+    first_page: int,
+) -> list[TocEntry]:
+    """Назначает каждому PDF первую страницу последовательного общего тома."""
+
+    if first_page < 1:
+        raise ValueError("Номер первой страницы должен быть положительным.")
+
+    entries: list[TocEntry] = []
+    current_page = first_page
+    for source in sources:
+        if source.page_count <= 0:
+            raise ValueError(
+                f"Не определено количество страниц PDF «{Path(source.source_path).name}»."
+            )
+        entries.append(
+            TocEntry(
+                title=source.title,
+                page_count=source.page_count,
+                start_page=current_page,
+                source_path=source.source_path,
+            )
+        )
+        current_page += source.page_count
+    return entries
+
+
+def build_toc_entries(
+    pdf_results: Iterable[PdfAreaResult],
+    xml_results: Iterable[XmlReleaseResult],
+    release_mode: str,
+    first_page: int,
+    toc_scope: str = TOC_SCOPE_OBJECTS,
+    settlement_title_format: tuple[str, str] | None = None,
+) -> tuple[list[TocEntry], int]:
+    """Собирает документы и назначает номера их первых страниц."""
+
+    sources, missing_xml_count = build_toc_sources(
+        pdf_results,
+        xml_results,
+        release_mode,
+        toc_scope,
+        settlement_title_format,
+    )
+    return paginate_toc_sources(sources, first_page), missing_xml_count
+
+
+def _validate_toc_pagination(
+    entries: Iterable[TocEntry],
+    front_matter_pages: int,
+) -> None:
+    """Не допускает сохранения оглавления с разрывом в накопительном счёте."""
+
+    expected_page = front_matter_pages + 1
+    for entry in entries:
+        if entry.start_page != expected_page:
+            raise RuntimeError(
+                "Нарушен последовательный расчёт страниц оглавления: "
+                f"для «{entry.title}» ожидалась страница {expected_page}, "
+                f"получена {entry.start_page}."
+            )
+        expected_page += entry.page_count
 
 
 def template_page_count(template_path: str | Path) -> int:
@@ -693,6 +761,7 @@ def create_release_toc(
     pdf_results = list(pdf_results)
     xml_results = list(xml_results)
     standard_template = None
+    settlement_title_format = None
     if template_path is None:
         if cover is None or not cover.municipality.strip():
             raise ValueError("Укажите муниципальное образование для титульника.")
@@ -702,11 +771,12 @@ def create_release_toc(
             _DEFAULT_SETTLEMENT_TITLE_PREFIX,
             f"муниципального образования {cover.municipality.strip()}",
         )
-        preliminary_entries, _ = build_toc_entries(
+        if toc_scope == TOC_SCOPE_SETTLEMENTS:
+            settlement_title_format = settlement_format
+        sources, missing_xml_count = build_toc_sources(
             pdf_results,
             xml_results,
             release_mode,
-            2,
             toc_scope,
             settlement_format,
         )
@@ -720,7 +790,7 @@ def create_release_toc(
         _write_standard_template(
             standard_template,
             cover,
-            _estimated_standard_pages(preliminary_entries),
+            _estimated_standard_pages(sources),
         )
         template = standard_template
     else:
@@ -731,18 +801,17 @@ def create_release_toc(
             raise ValueError("Шаблон оглавления должен быть файлом DOCX.")
         if template.resolve() == output.resolve():
             raise ValueError("Нельзя перезаписывать исходный шаблон оглавления.")
+        if toc_scope == TOC_SCOPE_SETTLEMENTS:
+            settlement_title_format = _settlement_title_format(template)
+        sources, missing_xml_count = build_toc_sources(
+            pdf_results,
+            xml_results,
+            release_mode,
+            toc_scope,
+            settlement_title_format,
+        )
 
     front_matter_pages = template_page_count(template)
-    settlement_title_format = (
-        (
-            _DEFAULT_SETTLEMENT_TITLE_PREFIX,
-            f"муниципального образования {cover.municipality.strip()}",
-        )
-        if cover is not None and toc_scope == TOC_SCOPE_SETTLEMENTS
-        else _settlement_title_format(template)
-        if toc_scope == TOC_SCOPE_SETTLEMENTS
-        else None
-    )
     with NamedTemporaryFile(
         prefix=f".{output.stem}-working-",
         suffix=".docx",
@@ -752,19 +821,13 @@ def create_release_toc(
         working_output = Path(temporary.name)
 
     def render_toc(page_count: int):
-        rendered_entries, missing_count = build_toc_entries(
-            pdf_results,
-            xml_results,
-            release_mode,
-            page_count + 1,
-            toc_scope,
-            settlement_title_format,
-        )
+        rendered_entries = paginate_toc_sources(sources, page_count + 1)
+        _validate_toc_pagination(rendered_entries, page_count)
         _write_docx(template, working_output, rendered_entries)
-        return rendered_entries, missing_count
+        return rendered_entries
 
     try:
-        entries, missing_xml_count = render_toc(front_matter_pages)
+        entries = render_toc(front_matter_pages)
 
         repaginated = False
         word_warning = ""
@@ -784,7 +847,7 @@ def create_release_toc(
                 if actual_pages == front_matter_pages:
                     break
                 front_matter_pages = actual_pages
-                entries, missing_xml_count = render_toc(front_matter_pages)
+                entries = render_toc(front_matter_pages)
             else:
                 word_warning = (
                     "Microsoft Word пересчитал документ, но число страниц "
